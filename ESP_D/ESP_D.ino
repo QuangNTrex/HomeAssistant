@@ -1,6 +1,18 @@
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
 #include <Servo.h>
+#include <time.h>
+
+// ================== TIME (NTP) ==================
+const char* ntpServer = "pool.ntp.org";
+const long  gmtOffset_sec = 7 * 3600; // GMT+7
+const int   daylightOffset_sec = 0;
+
+struct tm timeinfo;
+bool timeReady = false;
+
+// ============
+String timeOfDay = "";
 
 // ================== WIFI ==================
 const char* ssid = "Test";
@@ -40,6 +52,62 @@ int touchCount = 0;
 // motion
 bool lastMotionState = LOW;
 
+//=========
+bool isNightTime() {
+  if (!timeReady) return false;
+
+  if (!getLocalTime(&timeinfo)) return false;
+
+  int hour = timeinfo.tm_hour;
+  int minute = timeinfo.tm_min;
+
+  // 17:30 → 23:59
+  if (hour > 17 || (hour == 17 && minute >= 30)) {
+    return true;
+  }
+
+  // 00:00 → 04:59
+  if (hour < 5) {
+    return true;
+  }
+
+  return false;
+}
+
+String getTimeOfDay() {
+  if (!getLocalTime(&timeinfo)) return "Unknown";
+
+  int h = timeinfo.tm_hour;
+  int m = timeinfo.tm_min;
+
+  // Morning: 05:00 → 10:59
+  if (h >= 5 && h <= 10) {
+    return "Good morning";
+  }
+
+  // Midday: 11:00 → 13:59
+  if (h >= 11 && h <= 13) {
+    return "Good midday";
+  }
+
+  // Afternoon: 14:00 → 17:29
+  if (h >= 14 && (h < 17 || (h == 17 && m < 30))) {
+    return "Good afternoon";
+  }
+
+  // Evening: 17:30 → 04:59
+  return "Good evening";
+}
+void updateTimeOfDay() {
+  if (!timeReady) return;
+
+  String newState = getTimeOfDay();
+
+  if (newState != timeOfDay) {
+    timeOfDay = newState;
+    publishState("espD/time_of_day", timeOfDay);
+  }
+}
 // ================== WIFI ==================
 void setup_wifi() {
   WiFi.begin(ssid, password);
@@ -155,16 +223,18 @@ void reconnect() {
 }
 
 // ================== MOTION ==================
+
 void handleMotion() {
   bool motion = digitalRead(MOTION_PIN);
+  bool night = isNightTime();
 
   if (motion != lastMotionState) {
     lastMotionState = motion;
 
-    if (motion == HIGH) {
-      setLight(true);   // có người → bật đèn
+    if (motion == HIGH && night) {
+      setLight(true);   // có người + ban đêm → bật
     } else {
-      setLight(false);  // không có → tắt đèn
+      setLight(false);  // còn lại → tắt
     }
 
     publishState("espD/motion", motion ? "1" : "0");
@@ -201,6 +271,7 @@ void handleTouch() {
 }
 
 // ================== SETUP ==================
+
 void setup() {
   pinMode(RELAY1_PIN, OUTPUT);
   pinMode(RELAY2_PIN, OUTPUT);
@@ -219,13 +290,39 @@ void setup() {
 
   client.setServer(mqtt_server, 1883);
   client.setCallback(callback);
+
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+
+  // chờ lấy thời gian
+  while (!getLocalTime(&timeinfo)) {
+    delay(500);
+  }
+
+  // đánh dấu đã có thời gian
+  timeReady = true;
 }
 
 // ================== LOOP ==================
+void sub_loop_time() {
+  static unsigned long lastCheck = 0;
+
+  if (millis() - lastCheck > 30000) { // mỗi 30s
+    updateTimeOfDay();
+    lastCheck = millis();
+  }
+
+  static unsigned long lastSync = 0;
+
+  if (millis() - lastSync > 3600000) { // mỗi 1 giờ
+    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+    lastSync = millis();
+  }
+}
 void loop() {
   if (!client.connected()) reconnect();
   client.loop();
 
   handleMotion();
   handleTouch();
+  sub_loop_time();
 }

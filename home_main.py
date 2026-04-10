@@ -136,6 +136,20 @@ def setup_espD():
         }
     )
 
+     # ===== TIME OF DAY =====
+    publish_config(
+        "homeassistant/sensor/espD_time_of_day/config",
+        {
+            "name": "Time Of Day",
+            "state_topic": "espD/time_of_day",
+            "unique_id": "espD_time_of_day",
+            "icon": "mdi:clock-outline",
+            "device": device_espD
+        }
+    )
+
+    
+
 # ================== MAIN ==================
 client.loop_start()
 
