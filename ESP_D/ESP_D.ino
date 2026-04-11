@@ -4,8 +4,8 @@
 #include <time.h>
 
 // ================== TIME (NTP) ==================
-const char* ntpServer        = "pool.ntp.org";
-const long  gmtOffset_sec    = 7 * 3600; // GMT+7
+const char* ntpServer          = "pool.ntp.org";
+const long  gmtOffset_sec      = 7 * 3600; // GMT+7
 const int   daylightOffset_sec = 0;
 
 struct tm timeinfo;
@@ -31,20 +31,10 @@ const int SERVO_ON_ANGLE  = 180;
 #define SERVO2_PIN D6
 #define MOTION_PIN D7
 #define TOUCH_PIN  D0
-<<<<<<< HEAD
-=======
-<<<<<<< HEAD
 #define LIGHT_PIN  D4
 
 // ================== OBJECTS ==================
 WiFiClient   espClient;
-=======
->>>>>>> 462486a
-#define LIGHT_PIN  D4   // đèn
- 
-// ================== OBJECT ==================
-WiFiClient espClient;
->>>>>>> 2bcbd9d (update ESP_D)
 PubSubClient client(espClient);
 Servo servo1, servo2;
 
@@ -56,24 +46,30 @@ bool lightState     = false;
 unsigned long servoTimer[2] = {0, 0};
 bool servoActive[2]         = {false, false};
 
-bool LIGHT_ON  = LOW;
-bool LIGHT_OFF = HIGH;
+// FIX 1: Dùng int thay vì bool để tránh lỗi ngầm với LOW/HIGH
+const int LIGHT_ON  = LOW;   // D4 thường active-low (LOW = bật)
+const int LIGHT_OFF = HIGH;
 
 // ================== TOUCH STATE MACHINE ==================
 enum TouchPhase {
   TOUCH_IDLE,
-  TOUCH_COUNTING,  // đang đếm tap, chờ tap tiếp
-  TOUCH_HOLDING    // đang giữ, đã trigger hold
+  TOUCH_COUNTING,
+  TOUCH_HOLDING
 };
 
 TouchPhase    touchPhase     = TOUCH_IDLE;
-bool          lastTouchState = LOW;   // LOW = chưa chạm (idle)
+bool          lastTouchState = LOW;
 int           touchCount     = 0;
 unsigned long touchStartTime = 0;
 unsigned long lastTouchTime  = 0;
 
 // ================== MOTION ==================
 bool lastMotionState = LOW;
+
+// ================== MQTT RECONNECT COOLDOWN ==================
+// FIX 4: Thêm cooldown cho reconnect để tránh flood broker
+unsigned long lastReconnectAttempt = 0;
+const unsigned long RECONNECT_INTERVAL = 5000; // 5 giây
 
 // ============================================================
 //  TIME HELPERS
@@ -100,15 +96,14 @@ String getTimeOfDay() {
   int h = timeinfo.tm_hour;
   int m = timeinfo.tm_min;
 
-  // Pad giờ và phút về 2 chữ số
   String hStr = (h < 10 ? "0" : "") + String(h);
   String mStr = (m < 10 ? "0" : "") + String(m);
 
   String greeting;
-  if (h >= 5  && h <= 10)                          greeting = "morning";
-  else if (h >= 11 && h <= 13)                     greeting = "midday";
-  else if (h >= 14 && (h < 17 || (h == 17 && m < 30))) greeting = "afternoon";
-  else                                             greeting = "evening";
+  if      (h >= 5  && h <= 10)                               greeting = "morning";
+  else if (h >= 11 && h <= 13)                               greeting = "midday";
+  else if (h >= 14 && (h < 17 || (h == 17 && m < 30)))      greeting = "afternoon";
+  else                                                       greeting = "evening";
 
   return hStr + ":" + mStr + " Good " + greeting;
 }
@@ -133,7 +128,7 @@ void setup_wifi() {
   unsigned long start = millis();
   while (WiFi.status() != WL_CONNECTED) {
     delay(300);
-    if (millis() - start > 10000) break; // timeout 10s
+    if (millis() - start > 10000) break;
   }
 }
 
@@ -159,7 +154,6 @@ void turnOffRelay(int idx) { setRelay(idx, false);            }
 //  SERVO
 // ============================================================
 
-// Gọi trong loop() — detach servo sau khi đã quay xong (non-blocking)
 void handleServoTimeout() {
   for (int i = 0; i < 2; i++) {
     if (servoActive[i] && millis() - servoTimer[i] > 250) {
@@ -171,7 +165,7 @@ void handleServoTimeout() {
 }
 
 void setServo(int idx, bool state) {
-  if (servoState[idx] == state) return; // tránh spam
+  if (servoState[idx] == state) return;
 
   servoState[idx] = state;
   int angle = state ? SERVO_ON_ANGLE : SERVO_OFF_ANGLE;
@@ -184,7 +178,6 @@ void setServo(int idx, bool state) {
     servo2.write(angle);
   }
 
-  // bắt đầu timer để detach sau 250ms
   servoActive[idx] = true;
   servoTimer[idx]  = millis();
 
@@ -200,7 +193,9 @@ void turnOffServo(int idx) { setServo(idx, false);            }
 //  LIGHT
 // ============================================================
 
+// FIX 2: Thêm guard để tránh spam MQTT khi trạng thái không đổi
 void setLight(bool state) {
+  if (lightState == state) return; // Không làm gì nếu trạng thái đã đúng
   lightState = state;
   digitalWrite(LIGHT_PIN, state ? LIGHT_ON : LIGHT_OFF);
   client.publish("espD/light/state", state ? "ON" : "OFF");
@@ -211,13 +206,11 @@ void setLight(bool state) {
 // ============================================================
 
 void shutdownAllDevices() {
-  // ESP D
   turnOffRelay(0);
   turnOffRelay(1);
   turnOffServo(0);
   turnOffServo(1);
 
-  // ESP C (qua MQTT)
   client.publish("espC/relay1/set", "OFF");
   client.publish("espC/relay2/set", "OFF");
   client.publish("espC/relay3/set", "OFF");
@@ -262,11 +255,15 @@ void callback(char* topic, byte* payload, unsigned int length) {
 //  MQTT RECONNECT
 // ============================================================
 
+// FIX 4: Thêm cooldown 5s giữa các lần reconnect
 void reconnect() {
-  // Thử 1 lần, không block mãi để tránh treo loop()
+  unsigned long now = millis();
+  if (now - lastReconnectAttempt < RECONNECT_INTERVAL) return;
+  lastReconnectAttempt = now;
+
   if (client.connect("espD", nullptr, nullptr, "espD/status", 0, true, "offline")) {
     client.publish("espD/status", "online", true);
-    
+
     client.subscribe("espD/relay1/set");
     client.subscribe("espD/relay2/set");
     client.subscribe("espD/servo1/set");
@@ -278,17 +275,30 @@ void reconnect() {
 //  MOTION
 // ============================================================
 
+// FIX 3: Chỉ tắt đèn khi không có motion — không tắt nếu đang bật thủ công
+// Logic mới: đèn tự động chỉ BẬT khi có motion + ban đêm
+//            TẮT khi hết motion (bất kể thời gian) — chỉ khi lightState=true và không phải bật thủ công
+// Để phân biệt "bật tự động" vs "bật thủ công", thêm flag riêng
+bool lightAutoOn = false; // đèn đang bật do motion tự động
+
 void handleMotion() {
   bool motion = digitalRead(MOTION_PIN);
   bool night  = isNightTime();
 
   if (motion != lastMotionState) {
     lastMotionState = motion;
-
-    if (motion == HIGH && night) setLight(true);
-    else                         setLight(false);
-
     client.publish("espD/motion", motion ? "1" : "0");
+
+    if (motion == HIGH && night) {
+      // Có người + ban đêm → bật đèn tự động
+      lightAutoOn = true;
+      setLight(true);
+    } else if (motion == LOW && lightAutoOn) {
+      // Hết motion, đèn đang bật tự động → tắt
+      lightAutoOn = false;
+      setLight(false);
+    }
+    // Nếu motion=HIGH ban ngày, hoặc motion=LOW mà đèn bật thủ công → không làm gì
   }
 }
 
@@ -324,10 +334,8 @@ void handleTouch() {
     touchStartTime = now;
 
     if (touchPhase == TOUCH_COUNTING && now - lastTouchTime < 400) {
-      // Chạm tiếp trong cửa sổ 400ms → tăng đếm
       touchCount++;
     } else {
-      // Chạm đầu tiên hoặc quá 400ms → bắt đầu lại
       touchCount = 1;
       touchPhase = TOUCH_COUNTING;
     }
@@ -335,30 +343,27 @@ void handleTouch() {
     lastTouchTime = now;
   }
 
-  // ===== Kiểm tra HOLD (chỉ khi single tap, đang giữ) =====
+  // FIX 5: Kiểm tra HOLD — thêm guard touchPhase != TOUCH_HOLDING để tránh gọi lặp
   if (currentState == HIGH
       && touchPhase == TOUCH_COUNTING
       && touchCount == 1
       && now - touchStartTime > 2000) {
 
-    touchPhase = TOUCH_HOLDING;
+    touchPhase = TOUCH_HOLDING; // chuyển trạng thái TRƯỚC khi gọi action
     touchCount = 0;
     shutdownAllDevices();
-    // Không block — thả tay sẽ được xử lý ở vòng lặp sau
   }
 
   // ===== Phát hiện thả tay (cạnh xuống: HIGH → LOW) =====
   if (lastTouchState == HIGH && currentState == LOW) {
     if (touchPhase == TOUCH_HOLDING) {
-      // Thả sau hold → chỉ reset, không làm gì thêm
       touchPhase = TOUCH_IDLE;
     }
-    // TOUCH_COUNTING: chỉ ghi nhận thả, chờ timeout 400ms bên dưới
   }
 
-  // ===== Timeout multi-tap: 400ms sau lần thả cuối → thực thi =====
+  // ===== Timeout multi-tap: 400ms sau lần chạm cuối → thực thi =====
   if (touchPhase == TOUCH_COUNTING
-      && currentState == LOW          // đang thả tay
+      && currentState == LOW
       && now - lastTouchTime > 400) {
 
     if      (touchCount == 1) toggleServo(0);
@@ -381,14 +386,11 @@ void setup() {
   pinMode(RELAY2_PIN, OUTPUT);
   pinMode(LIGHT_PIN,  OUTPUT);
   pinMode(MOTION_PIN, INPUT);
-  pinMode(TOUCH_PIN,  INPUT);  // cảm biến chạm: HIGH=chạm, LOW=thả — không dùng PULLUP
+  pinMode(TOUCH_PIN,  INPUT);
 
   digitalWrite(RELAY1_PIN, LOW);
   digitalWrite(RELAY2_PIN, LOW);
-  digitalWrite(LIGHT_PIN,  LOW);
-
-  // KHÔNG attach servo ở đây — setServo() tự attach khi cần
-  // và handleServoTimeout() sẽ detach sau 250ms
+  digitalWrite(LIGHT_PIN,  LIGHT_OFF); // Dùng constant thay vì LOW cho nhất quán
 
   setup_wifi();
 
@@ -397,7 +399,6 @@ void setup() {
 
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
 
-  // Chờ lấy thời gian (tối đa 10s)
   unsigned long start = millis();
   while (!getLocalTime(&timeinfo)) {
     delay(500);
@@ -415,12 +416,12 @@ void sub_loop_time() {
   static unsigned long lastCheck = 0;
   static unsigned long lastSync  = 0;
 
-  if (millis() - lastCheck > 30000) {   // mỗi 30s cập nhật timeOfDay
+  if (millis() - lastCheck > 30000) {
     updateTimeOfDay();
     lastCheck = millis();
   }
 
-  if (millis() - lastSync > 3600000) {  // mỗi 1h sync lại NTP
+  if (millis() - lastSync > 3600000) {
     configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
     lastSync = millis();
   }
