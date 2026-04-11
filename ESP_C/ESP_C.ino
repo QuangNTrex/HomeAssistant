@@ -29,6 +29,8 @@ bool relayState[3] = {false, false, false};
 unsigned long lastTouchTime = 0;
 bool lastTouchState = HIGH;
 int touchCount = 0;
+unsigned long touchStartTime = 0;
+bool holdTriggered = false;
 
 // DHT
 unsigned long lastDHTRead = 0;
@@ -96,7 +98,8 @@ void callback(char* topic, byte* payload, unsigned int length) {
 // ================== MQTT RECONNECT ==================
 void reconnect() {
   while (!client.connected()) {
-    if (client.connect("espC")) {
+    if (client.connect("espC", nullptr, nullptr, "espC/status", 0, true, "offline")) {
+      client.publish("espC/status", "online", true);
       client.subscribe("espC/relay1/set");
       client.subscribe("espC/relay2/set");
       client.subscribe("espC/relay3/set");
@@ -109,10 +112,11 @@ void reconnect() {
 // ================== TOUCH HANDLE ==================
 void handleTouch() {
   bool currentState = digitalRead(TOUCH);
+  unsigned long now = millis();
 
-  // phát hiện cạnh (nhấn)
-  if (lastTouchState == HIGH && currentState == LOW) {
-    unsigned long now = millis();
+  // ===== Phát hiện chạm (cạnh lên: LOW → HIGH) =====
+  if (lastTouchState == LOW && currentState == HIGH) {
+    touchStartTime = now;
 
     if (now - lastTouchTime < 500) {
       touchCount++;
@@ -123,20 +127,36 @@ void handleTouch() {
     lastTouchTime = now;
   }
 
-  // xử lý sau khi hết chuỗi chạm
-  if (touchCount > 0 && millis() - lastTouchTime > 500) {
-    if (touchCount == 1) {
-      toggleRelay(0); // 1 chạm → toggle relay 1
-    }
+  // ===== Hold: giữ > 2s, chỉ khi single tap =====
+  if (currentState == HIGH
+      && touchCount == 1
+      && !holdTriggered
+      && now - touchStartTime > 2000) {
 
-    // 2,3 chạm chưa xử lý
+    holdTriggered = true;
+    touchCount = 0;
+    client.publish("espD/servo2/set", "TOGGLE"); // den bep
+  }
+
+  // ===== Reset hold khi thả tay =====
+  if (lastTouchState == HIGH && currentState == LOW) {
+    holdTriggered = false;
+  }
+
+  // ===== Xử lý sau khi hết chuỗi chạm (timeout 500ms) =====
+  if (touchCount > 0 && !holdTriggered && currentState == LOW
+      && now - lastTouchTime > 500) {
+
+    if      (touchCount == 1) toggleRelay(0);
+    else if (touchCount == 2) client.publish("espD/relay1/set", "TOGGLE"); // bat quat
+    else if (touchCount == 3) client.publish("espD/servo1/set", "TOGGLE"); // bat den chinh
+    else if (touchCount == 4) toggleRelay(1); // bat tat man hinh
 
     touchCount = 0;
   }
 
   lastTouchState = currentState;
 }
-
 // ================== DHT NON-BLOCKING ==================
 void handleDHT() {
   if (millis() - lastDHTRead >= DHT_INTERVAL) {
