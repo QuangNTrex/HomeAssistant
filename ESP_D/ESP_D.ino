@@ -33,7 +33,7 @@ const int SERVO_ON_ANGLE  = 180;
 #define MOTION_PIN D7
 #define TOUCH_PIN  D0
 #define LIGHT_PIN  D4   // đèn
-
+ 
 // ================== OBJECT ==================
 WiFiClient espClient;
 PubSubClient client(espClient);
