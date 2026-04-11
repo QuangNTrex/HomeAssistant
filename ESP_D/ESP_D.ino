@@ -43,6 +43,8 @@ Servo servo1, servo2;
 bool relayState[2] = {false, false};
 bool servoState[2] = {false, false};
 bool lightState = false;
+unsigned long servoTimer[2] = {0, 0};
+bool servoActive[2] = {false, false};
 
 // touch
 unsigned long lastTouchTime = 0;
@@ -51,6 +53,10 @@ int touchCount = 0;
 
 // motion
 bool lastMotionState = LOW;
+
+//
+bool LIGHT_ON = LOW;
+bool LIGHT_OFF = HIGH;
 
 //=========
 bool isNightTime() {
@@ -110,10 +116,14 @@ void updateTimeOfDay() {
   }
 }
 // ================== WIFI ==================
+
 void setup_wifi() {
   WiFi.begin(ssid, password);
+
+  unsigned long start = millis();
   while (WiFi.status() != WL_CONNECTED) {
     delay(300);
+    if (millis() - start > 10000) break; // timeout 10s
   }
 }
 
@@ -145,18 +155,52 @@ void turnOffRelay(int idx) {
 }
 
 // ================== SERVO ==================
+void handleServoTimeout() {
+  for (int i = 0; i < 2; i++) {
+    if (servoActive[i] && millis() - servoTimer[i] > 500) {
+      if (i == 0) servo1.detach();
+      else servo2.detach();
+
+      servoActive[i] = false;
+    }
+  }
+}
+
 void setServo(int idx, bool state) {
+  if (servoState[idx] == state) return; // tránh spam
+
   servoState[idx] = state;
 
   int angle = state ? SERVO_ON_ANGLE : SERVO_OFF_ANGLE;
 
-  if (idx == 0) servo1.write(angle);
-  else servo2.write(angle);
-  delay(500); // chờ servo quay
-  servo.detach();
+  if (idx == 0) {
+    servo1.attach(SERVO1_PIN);
+    servo1.write(angle);
+  } else {
+    servo2.attach(SERVO2_PIN);
+    servo2.write(angle);
+  }
 
-  publishState("espD/servo" + String(idx + 1) + "/state", state ? "ON" : "OFF");
+  // bắt đầu timer
+  servoActive[idx] = true;
+  servoTimer[idx] = millis();
+
+  // dùng String
+  String topic = "espD/servo" + String(idx + 1) + "/state";
+  publishState(topic, state ? "ON" : "OFF");
 }
+// void setServo(int idx, bool state) {
+//   servoState[idx] = state;
+
+//   int angle = state ? SERVO_ON_ANGLE : SERVO_OFF_ANGLE;
+
+//   if (idx == 0) servo1.write(angle);
+//   else servo2.write(angle);
+//   delay(500); // chờ servo quay
+//   servo.detach();
+
+//   publishState("espD/servo" + String(idx + 1) + "/state", state ? "ON" : "OFF");
+// }
 
 void toggleServo(int idx) {
   setServo(idx, !servoState[idx]);
@@ -173,7 +217,7 @@ void turnOffServo(int idx) {
 // ================== LIGHT ==================
 void setLight(bool state) {
   lightState = state;
-  digitalWrite(LIGHT_PIN, state ? HIGH : LOW);
+  digitalWrite(LIGHT_PIN, state ? LIGHT_ON : LIGHT_OFF);
   publishState("espD/light/state", state ? "ON" : "OFF");
 }
 
@@ -297,8 +341,10 @@ void setup() {
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
 
   // chờ lấy thời gian
+  unsigned long start = millis();
   while (!getLocalTime(&timeinfo)) {
     delay(500);
+    if (millis() - start > 10000) break;
   }
 
   // đánh dấu đã có thời gian
@@ -329,4 +375,5 @@ void loop() {
   handleMotion();
   handleTouch();
   sub_loop_time();
+  handleServoTimeout();
 }
