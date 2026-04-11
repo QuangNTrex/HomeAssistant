@@ -39,13 +39,9 @@ PubSubClient client(espClient);
 Servo servo1, servo2;
 
 // ================== STATE ==================
-<<<<<<< HEAD
-bool relayState[2] = {false, false};
-bool servoState[2] = {false, false};
-bool lightState = false;
-unsigned long servoTimer[2] = {0, 0};
-bool servoActive[2] = {false, false};
-
+bool relayState[2]  = {false, false};
+bool servoState[2]  = {false, false};
+bool lightState     = false;
 
 unsigned long servoTimer[2] = {0, 0};
 bool servoActive[2]         = {false, false};
@@ -69,12 +65,9 @@ unsigned long lastTouchTime  = 0;
 // ================== MOTION ==================
 bool lastMotionState = LOW;
 
-<<<<<<< HEAD
-//
-bool LIGHT_ON = LOW;
-bool LIGHT_OFF = HIGH;
-
-//=========
+// ============================================================
+//  TIME HELPERS
+// ============================================================
 
 bool isNightTime() {
   if (!timeReady) return false;
@@ -97,17 +90,10 @@ String getTimeOfDay() {
   int h = timeinfo.tm_hour;
   int m = timeinfo.tm_min;
 
-  // Pad giờ và phút về 2 chữ số
-  String hStr = (h < 10 ? "0" : "") + String(h);
-  String mStr = (m < 10 ? "0" : "") + String(m);
-
-  String greeting;
-  if (h >= 5  && h <= 10)                          greeting = "morning";
-  else if (h >= 11 && h <= 13)                     greeting = "midday";
-  else if (h >= 14 && (h < 17 || (h == 17 && m < 30))) greeting = "afternoon";
-  else                                             greeting = "evening";
-
-  return hStr + ":" + mStr + " Good " + greeting;
+  if (h >= 5  && h <= 10)                           return "Good morning";
+  if (h >= 11 && h <= 13)                           return "Good midday";
+  if (h >= 14 && (h < 17 || (h == 17 && m < 30)))  return "Good afternoon";
+  return "Good evening";
 }
 
 void updateTimeOfDay() {
@@ -119,14 +105,10 @@ void updateTimeOfDay() {
     client.publish("espD/time_of_day", timeOfDay.c_str());
   }
 }
-<<<<<<< HEAD
-// ================== WIFI ==================
-=======
 
 // ============================================================
 //  WIFI
 // ============================================================
->>>>>>> ed16b07 (update from laptop)
 
 void setup_wifi() {
   WiFi.begin(ssid, password);
@@ -171,35 +153,8 @@ void handleServoTimeout() {
   }
 }
 
-<<<<<<< HEAD
-void turnOnRelay(int idx) {
-  setRelay(idx, true);
-}
-
-void turnOffRelay(int idx) {
-  setRelay(idx, false);
-}
-
-// ================== SERVO ==================
-void handleServoTimeout() {
-  for (int i = 0; i < 2; i++) {
-    if (servoActive[i] && millis() - servoTimer[i] > 500) {
-      if (i == 0) servo1.detach();
-      else servo2.detach();
-
-      servoActive[i] = false;
-    }
-  }
-}
-
 void setServo(int idx, bool state) {
   if (servoState[idx] == state) return; // tránh spam
-
-  servoState[idx] = state;
-=======
-void setServo(int idx, bool state) {
-  if (servoState[idx] == state) return; // tránh spam
->>>>>>> ed16b07 (update from laptop)
 
   servoState[idx] = state;
   int angle = state ? SERVO_ON_ANGLE : SERVO_OFF_ANGLE;
@@ -212,35 +167,13 @@ void setServo(int idx, bool state) {
     servo2.write(angle);
   }
 
-<<<<<<< HEAD
-  // bắt đầu timer
-  servoActive[idx] = true;
-  servoTimer[idx] = millis();
-
-  // dùng String
-  String topic = "espD/servo" + String(idx + 1) + "/state";
-  publishState(topic, state ? "ON" : "OFF");
-=======
   // bắt đầu timer để detach sau 250ms
   servoActive[idx] = true;
   servoTimer[idx]  = millis();
 
   String topic = "espD/servo" + String(idx + 1) + "/state";
   client.publish(topic.c_str(), state ? "ON" : "OFF");
->>>>>>> ed16b07 (update from laptop)
 }
-// void setServo(int idx, bool state) {
-//   servoState[idx] = state;
-
-//   int angle = state ? SERVO_ON_ANGLE : SERVO_OFF_ANGLE;
-
-//   if (idx == 0) servo1.write(angle);
-//   else servo2.write(angle);
-//   delay(500); // chờ servo quay
-//   servo.detach();
-
-//   publishState("espD/servo" + String(idx + 1) + "/state", state ? "ON" : "OFF");
-// }
 
 void toggleServo(int idx) { setServo(idx, !servoState[idx]); }
 void turnOnServo(int idx)  { setServo(idx, true);             }
@@ -253,11 +186,7 @@ void turnOffServo(int idx) { setServo(idx, false);            }
 void setLight(bool state) {
   lightState = state;
   digitalWrite(LIGHT_PIN, state ? LIGHT_ON : LIGHT_OFF);
-<<<<<<< HEAD
-  publishState("espD/light/state", state ? "ON" : "OFF");
-=======
   client.publish("espD/light/state", state ? "ON" : "OFF");
->>>>>>> ed16b07 (update from laptop)
 }
 
 // ============================================================
@@ -449,11 +378,7 @@ void setup() {
 
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
 
-<<<<<<< HEAD
-  // chờ lấy thời gian
-=======
   // Chờ lấy thời gian (tối đa 10s)
->>>>>>> ed16b07 (update from laptop)
   unsigned long start = millis();
   while (!getLocalTime(&timeinfo)) {
     delay(500);
@@ -494,6 +419,4 @@ void loop() {
   handleTouch();
   handleServoTimeout();
   sub_loop_time();
-  handleServoTimeout();
 }
-
