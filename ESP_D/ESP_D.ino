@@ -22,17 +22,17 @@ const char* password = "24082002";
 const char* mqtt_server = "192.168.0.100";
 
 // =================== Constant
-const int SERVO_OFF_ANGLE = 110;
+const int SERVO_OFF_ANGLE = 100;
 const int SERVO_ON_ANGLE  = 180;
 
 // ================== PIN ==================
-#define SERVO1_PIN D1
-#define SERVO2_PIN D2
-#define RELAY1_PIN D5
-#define RELAY2_PIN D6
+#define RELAY1_PIN D1
+#define RELAY2_PIN D2
+#define SERVO1_PIN D5
+#define SERVO2_PIN D6
 #define MOTION_PIN D7
 #define TOUCH_PIN  D0
-#define LIGHT_PIN  D3   // đèn
+#define LIGHT_PIN  D4   // đèn
 
 // ================== OBJECT ==================
 WiFiClient espClient;
@@ -41,7 +41,7 @@ Servo servo1, servo2;
 
 // ================== STATE ==================
 bool relayState[2] = {false, false};
-bool servoState[2] = {false, false}; // false=0°, true=90°
+bool servoState[2] = {false, false};
 bool lightState = false;
 
 // touch
@@ -98,6 +98,7 @@ String getTimeOfDay() {
   // Evening: 17:30 → 04:59
   return "Good evening";
 }
+
 void updateTimeOfDay() {
   if (!timeReady) return;
 
@@ -151,6 +152,8 @@ void setServo(int idx, bool state) {
 
   if (idx == 0) servo1.write(angle);
   else servo2.write(angle);
+  delay(500); // chờ servo quay
+  servo.detach();
 
   publishState("espD/servo" + String(idx + 1) + "/state", state ? "ON" : "OFF");
 }
@@ -318,6 +321,7 @@ void sub_loop_time() {
     lastSync = millis();
   }
 }
+
 void loop() {
   if (!client.connected()) reconnect();
   client.loop();
