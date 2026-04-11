@@ -31,10 +31,17 @@ const int SERVO_ON_ANGLE  = 180;
 #define SERVO2_PIN D6
 #define MOTION_PIN D7
 #define TOUCH_PIN  D0
+<<<<<<< HEAD
 #define LIGHT_PIN  D4
 
 // ================== OBJECTS ==================
 WiFiClient   espClient;
+=======
+#define LIGHT_PIN  D4   // đèn
+ 
+// ================== OBJECT ==================
+WiFiClient espClient;
+>>>>>>> 2bcbd9d (update ESP_D)
 PubSubClient client(espClient);
 Servo servo1, servo2;
 
@@ -254,7 +261,9 @@ void callback(char* topic, byte* payload, unsigned int length) {
 
 void reconnect() {
   // Thử 1 lần, không block mãi để tránh treo loop()
-  if (client.connect("espD")) {
+  if (client.connect("espD", nullptr, nullptr, "espD/status", 0, true, "offline")) {
+    client.publish("espD/status", "online", true);
+    
     client.subscribe("espD/relay1/set");
     client.subscribe("espD/relay2/set");
     client.subscribe("espD/servo1/set");
