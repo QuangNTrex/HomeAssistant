@@ -90,10 +90,17 @@ String getTimeOfDay() {
   int h = timeinfo.tm_hour;
   int m = timeinfo.tm_min;
 
-  if (h >= 5  && h <= 10)                           return "Good morning";
-  if (h >= 11 && h <= 13)                           return "Good midday";
-  if (h >= 14 && (h < 17 || (h == 17 && m < 30)))  return "Good afternoon";
-  return "Good evening";
+  // Pad giờ và phút về 2 chữ số
+  String hStr = (h < 10 ? "0" : "") + String(h);
+  String mStr = (m < 10 ? "0" : "") + String(m);
+
+  String greeting;
+  if (h >= 5  && h <= 10)                          greeting = "morning";
+  else if (h >= 11 && h <= 13)                     greeting = "midday";
+  else if (h >= 14 && (h < 17 || (h == 17 && m < 30))) greeting = "afternoon";
+  else                                             greeting = "evening";
+
+  return hStr + ":" + mStr + " Good " + greeting;
 }
 
 void updateTimeOfDay() {
