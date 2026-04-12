@@ -5,7 +5,7 @@
 
 // ================== TIME (NTP) ==================
 const char* ntpServer          = "pool.ntp.org";
-const long  gmtOffset_sec      = 7 * 3600;
+const long  gmtOffset_sec      = 7 * 3600; // GMT+7
 const int   daylightOffset_sec = 0;
 
 struct tm timeinfo;
@@ -21,9 +21,8 @@ const char* password = "24082002";
 const char* mqtt_server = "192.168.0.100";
 
 // ================== CONSTANTS ==================
-// FIX 5: Đặt góc rõ ràng — chỉnh lại nếu servo của bạn khác
-const int SERVO_OFF_ANGLE = 100;  // góc khi TẮT
-const int SERVO_ON_ANGLE  = 180;  // góc khi BẬT
+const int SERVO_OFF_ANGLE = 100;
+const int SERVO_ON_ANGLE  = 180;
 
 // ================== PIN ==================
 #define RELAY1_PIN D1
@@ -40,18 +39,23 @@ PubSubClient client(espClient);
 Servo servo1, servo2;
 
 // ================== STATE ==================
-bool relayState[2] = {false, false};
-bool servoState[2] = {false, false};
-bool lightState    = false;
+bool relayState[2]  = {false, false};
+bool servoState[2]  = {false, false};
+bool lightState     = false;
 
 unsigned long servoTimer[2] = {0, 0};
 bool servoActive[2]         = {false, false};
 
-const int LIGHT_ON  = LOW;
+// FIX 1: Dùng int thay vì bool để tránh lỗi ngầm với LOW/HIGH
+const int LIGHT_ON  = LOW;   // D4 thường active-low (LOW = bật)
 const int LIGHT_OFF = HIGH;
 
 // ================== TOUCH STATE MACHINE ==================
-enum TouchPhase { TOUCH_IDLE, TOUCH_COUNTING, TOUCH_HOLDING };
+enum TouchPhase {
+  TOUCH_IDLE,
+  TOUCH_COUNTING,
+  TOUCH_HOLDING
+};
 
 TouchPhase    touchPhase     = TOUCH_IDLE;
 bool          lastTouchState = LOW;
@@ -61,11 +65,11 @@ unsigned long lastTouchTime  = 0;
 
 // ================== MOTION ==================
 bool lastMotionState = LOW;
-bool lightAutoOn     = false;
 
 // ================== MQTT RECONNECT COOLDOWN ==================
+// FIX 4: Thêm cooldown cho reconnect để tránh flood broker
 unsigned long lastReconnectAttempt = 0;
-const unsigned long RECONNECT_INTERVAL = 5000;
+const unsigned long RECONNECT_INTERVAL = 5000; // 5 giây
 
 // ============================================================
 //  TIME HELPERS
@@ -78,7 +82,9 @@ bool isNightTime() {
   int hour   = timeinfo.tm_hour;
   int minute = timeinfo.tm_min;
 
+  // 17:30 → 23:59
   if (hour > 17 || (hour == 17 && minute >= 30)) return true;
+  // 00:00 → 04:59
   if (hour < 5) return true;
 
   return false;
@@ -94,16 +100,17 @@ String getTimeOfDay() {
   String mStr = (m < 10 ? "0" : "") + String(m);
 
   String greeting;
-  if      (h >= 5  && h <= 10)                          greeting = "morning";
-  else if (h >= 11 && h <= 13)                          greeting = "midday";
-  else if (h >= 14 && (h < 17 || (h == 17 && m < 30))) greeting = "afternoon";
-  else                                                  greeting = "evening";
+  if      (h >= 5  && h <= 10)                               greeting = "morning";
+  else if (h >= 11 && h <= 13)                               greeting = "midday";
+  else if (h >= 14 && (h < 17 || (h == 17 && m < 30)))      greeting = "afternoon";
+  else                                                       greeting = "evening";
 
   return hStr + ":" + mStr + " Good " + greeting;
 }
 
 void updateTimeOfDay() {
   if (!timeReady) return;
+
   String newState = getTimeOfDay();
   if (newState != timeOfDay) {
     timeOfDay = newState;
@@ -116,30 +123,27 @@ void updateTimeOfDay() {
 // ============================================================
 
 void setup_wifi() {
-  Serial.printf("Connecting to Wi-Fi %s...\n", ssid);
   WiFi.begin(ssid, password);
 
   unsigned long start = millis();
   while (WiFi.status() != WL_CONNECTED) {
     delay(300);
-    Serial.print('.');
     if (millis() - start > 10000) break;
   }
-  Serial.println();
-  Serial.printf("Wi-Fi %s\n", WiFi.status() == WL_CONNECTED ? "connected" : "failed");
 }
 
 // ============================================================
 //  RELAY
 // ============================================================
 
-const char* relayStateTopics[2] = {"espD/relay1/state", "espD/relay2/state"};
-
 void setRelay(int idx, bool state) {
   relayState[idx] = state;
+
   int pin = (idx == 0) ? RELAY1_PIN : RELAY2_PIN;
   digitalWrite(pin, state ? HIGH : LOW);
-  client.publish(relayStateTopics[idx], state ? "ON" : "OFF");
+
+  String topic = "espD/relay" + String(idx + 1) + "/state";
+  client.publish(topic.c_str(), state ? "ON" : "OFF");
 }
 
 void toggleRelay(int idx) { setRelay(idx, !relayState[idx]); }
@@ -152,7 +156,7 @@ void turnOffRelay(int idx) { setRelay(idx, false);            }
 
 void handleServoTimeout() {
   for (int i = 0; i < 2; i++) {
-    if (servoActive[i] && millis() - servoTimer[i] > 500) { // tăng lên 500ms cho chắc
+    if (servoActive[i] && millis() - servoTimer[i] > 250) {
       if (i == 0) servo1.detach();
       else        servo2.detach();
       servoActive[i] = false;
@@ -160,11 +164,10 @@ void handleServoTimeout() {
   }
 }
 
-// FIX 4: Publish state TRƯỚC khi ghi servoState để nếu publish fail,
-//        servoState vẫn giữ giá trị cũ → toggle lần sau đúng chiều
 void setServo(int idx, bool state) {
   if (servoState[idx] == state) return;
 
+  servoState[idx] = state;
   int angle = state ? SERVO_ON_ANGLE : SERVO_OFF_ANGLE;
 
   if (idx == 0) {
@@ -178,19 +181,8 @@ void setServo(int idx, bool state) {
   servoActive[idx] = true;
   servoTimer[idx]  = millis();
 
-  // Publish topic state
   String topic = "espD/servo" + String(idx + 1) + "/state";
-  bool publishOk = client.publish(topic.c_str(), state ? "ON" : "OFF");
-
-  // FIX 4: Chỉ cập nhật servoState nếu servo thực sự đã quay
-  // (servo đã nhận lệnh write() ở trên, nên luôn cập nhật state)
-  // Nhưng nếu MQTT mất kết nối khi reconnect, publish sẽ fail —
-  // ta vẫn cập nhật servoState vì servo VẬT LÝ đã quay rồi.
-  servoState[idx] = state;
-
-  if (!publishOk) {
-    Serial.printf("servo%d publish fail, state updated locally\n", idx + 1);
-  }
+  client.publish(topic.c_str(), state ? "ON" : "OFF");
 }
 
 void toggleServo(int idx) { setServo(idx, !servoState[idx]); }
@@ -201,8 +193,9 @@ void turnOffServo(int idx) { setServo(idx, false);            }
 //  LIGHT
 // ============================================================
 
+// FIX 2: Thêm guard để tránh spam MQTT khi trạng thái không đổi
 void setLight(bool state) {
-  if (lightState == state) return;
+  if (lightState == state) return; // Không làm gì nếu trạng thái đã đúng
   lightState = state;
   digitalWrite(LIGHT_PIN, state ? LIGHT_ON : LIGHT_OFF);
   client.publish("espD/light/state", state ? "ON" : "OFF");
@@ -228,32 +221,33 @@ void shutdownAllDevices() {
 // ============================================================
 
 void callback(char* topic, byte* payload, unsigned int length) {
-  char msg[16] = {0};
-  unsigned int copyLen = length < sizeof(msg) - 1 ? length : sizeof(msg) - 1;
-  memcpy(msg, payload, copyLen);
+  String msg;
+  for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
 
-  if (strcmp(topic, "espD/relay1/set") == 0) {
-    if      (strcmp(msg, "ON")     == 0) turnOnRelay(0);
-    else if (strcmp(msg, "OFF")    == 0) turnOffRelay(0);
-    else if (strcmp(msg, "TOGGLE") == 0) toggleRelay(0);
-    return;
+  String t = String(topic);
+
+  if (t == "espD/relay1/set") {
+    if      (msg == "ON")     turnOnRelay(0);
+    else if (msg == "OFF")    turnOffRelay(0);
+    else if (msg == "TOGGLE") toggleRelay(0);
   }
-  if (strcmp(topic, "espD/relay2/set") == 0) {
-    if      (strcmp(msg, "ON")     == 0) turnOnRelay(1);
-    else if (strcmp(msg, "OFF")    == 0) turnOffRelay(1);
-    else if (strcmp(msg, "TOGGLE") == 0) toggleRelay(1);
-    return;
+
+  if (t == "espD/relay2/set") {
+    if      (msg == "ON")     turnOnRelay(1);
+    else if (msg == "OFF")    turnOffRelay(1);
+    else if (msg == "TOGGLE") toggleRelay(1);
   }
-  if (strcmp(topic, "espD/servo1/set") == 0) {
-    if      (strcmp(msg, "ON")     == 0) turnOnServo(0);
-    else if (strcmp(msg, "OFF")    == 0) turnOffServo(0);
-    else if (strcmp(msg, "TOGGLE") == 0) toggleServo(0);
-    return;
+
+  if (t == "espD/servo1/set") {
+    if      (msg == "ON")     turnOnServo(0);
+    else if (msg == "OFF")    turnOffServo(0);
+    else if (msg == "TOGGLE") toggleServo(0);
   }
-  if (strcmp(topic, "espD/servo2/set") == 0) {
-    if      (strcmp(msg, "ON")     == 0) turnOnServo(1);
-    else if (strcmp(msg, "OFF")    == 0) turnOffServo(1);
-    else if (strcmp(msg, "TOGGLE") == 0) toggleServo(1);
+
+  if (t == "espD/servo2/set") {
+    if      (msg == "ON")     turnOnServo(1);
+    else if (msg == "OFF")    turnOffServo(1);
+    else if (msg == "TOGGLE") toggleServo(1);
   }
 }
 
@@ -261,36 +255,31 @@ void callback(char* topic, byte* payload, unsigned int length) {
 //  MQTT RECONNECT
 // ============================================================
 
+// FIX 4: Thêm cooldown 5s giữa các lần reconnect
 void reconnect() {
   unsigned long now = millis();
   if (now - lastReconnectAttempt < RECONNECT_INTERVAL) return;
   lastReconnectAttempt = now;
 
-  Serial.println("MQTT reconnect...");
   if (client.connect("espD", nullptr, nullptr, "espD/status", 0, true, "offline")) {
-    Serial.println("MQTT connected");
     client.publish("espD/status", "online", true);
 
     client.subscribe("espD/relay1/set");
     client.subscribe("espD/relay2/set");
     client.subscribe("espD/servo1/set");
     client.subscribe("espD/servo2/set");
-
-    // FIX 4: Sau reconnect, publish lại trạng thái hiện tại
-    //        để dashboard/app biết đúng state
-    client.publish(relayStateTopics[0], relayState[0] ? "ON" : "OFF", true);
-    client.publish(relayStateTopics[1], relayState[1] ? "ON" : "OFF", true);
-    client.publish("espD/servo1/state", servoState[0] ? "ON" : "OFF", true);
-    client.publish("espD/servo2/state", servoState[1] ? "ON" : "OFF", true);
-    client.publish("espD/light/state",  lightState    ? "ON" : "OFF", true);
-  } else {
-    Serial.printf("MQTT connect failed: %d\n", client.state());
   }
 }
 
 // ============================================================
 //  MOTION
 // ============================================================
+
+// FIX 3: Chỉ tắt đèn khi không có motion — không tắt nếu đang bật thủ công
+// Logic mới: đèn tự động chỉ BẬT khi có motion + ban đêm
+//            TẮT khi hết motion (bất kể thời gian) — chỉ khi lightState=true và không phải bật thủ công
+// Để phân biệt "bật tự động" vs "bật thủ công", thêm flag riêng
+bool lightAutoOn = false; // đèn đang bật do motion tự động
 
 void handleMotion() {
   bool motion = digitalRead(MOTION_PIN);
@@ -301,23 +290,46 @@ void handleMotion() {
     client.publish("espD/motion", motion ? "1" : "0");
 
     if (motion == HIGH && night) {
+      // Có người + ban đêm → bật đèn tự động
       lightAutoOn = true;
       setLight(true);
     } else if (motion == LOW && lightAutoOn) {
+      // Hết motion, đèn đang bật tự động → tắt
       lightAutoOn = false;
       setLight(false);
     }
+    // Nếu motion=HIGH ban ngày, hoặc motion=LOW mà đèn bật thủ công → không làm gì
   }
 }
 
 // ============================================================
 //  TOUCH — STATE MACHINE (non-blocking)
+//
+//  Cảm biến chạm: HIGH = đang chạm, LOW = đã thả
+//  pinMode: INPUT (không dùng PULLUP)
+//
+//  Sơ đồ trạng thái:
+//
+//   IDLE ──[chạm: LOW→HIGH]──► COUNTING
+//            (touchCount = 1)
+//
+//   COUNTING ──[chạm lại trong 400ms]──► COUNTING
+//               (touchCount++)
+//
+//   COUNTING ──[giữ > 2000ms, touchCount == 1]──► HOLDING
+//               → shutdownAllDevices()
+//
+//   COUNTING ──[thả + 400ms không chạm thêm]──► IDLE
+//               → thực thi hành động theo touchCount
+//
+//   HOLDING ──[thả: HIGH→LOW]──► IDLE
 // ============================================================
 
 void handleTouch() {
   bool currentState = digitalRead(TOUCH_PIN);
   unsigned long now = millis();
 
+  // ===== Phát hiện chạm (cạnh lên: LOW → HIGH) =====
   if (lastTouchState == LOW && currentState == HIGH) {
     touchStartTime = now;
 
@@ -331,22 +343,25 @@ void handleTouch() {
     lastTouchTime = now;
   }
 
+  // FIX 5: Kiểm tra HOLD — thêm guard touchPhase != TOUCH_HOLDING để tránh gọi lặp
   if (currentState == HIGH
       && touchPhase == TOUCH_COUNTING
       && touchCount == 1
       && now - touchStartTime > 2000) {
 
-    touchPhase = TOUCH_HOLDING;
+    touchPhase = TOUCH_HOLDING; // chuyển trạng thái TRƯỚC khi gọi action
     touchCount = 0;
     shutdownAllDevices();
   }
 
+  // ===== Phát hiện thả tay (cạnh xuống: HIGH → LOW) =====
   if (lastTouchState == HIGH && currentState == LOW) {
     if (touchPhase == TOUCH_HOLDING) {
       touchPhase = TOUCH_IDLE;
     }
   }
 
+  // ===== Timeout multi-tap: 400ms sau lần chạm cuối → thực thi =====
   if (touchPhase == TOUCH_COUNTING
       && currentState == LOW
       && now - lastTouchTime > 400) {
@@ -367,9 +382,6 @@ void handleTouch() {
 // ============================================================
 
 void setup() {
-  Serial.begin(115200);
-  Serial.println("ESP_D starting...");
-
   pinMode(RELAY1_PIN, OUTPUT);
   pinMode(RELAY2_PIN, OUTPUT);
   pinMode(LIGHT_PIN,  OUTPUT);
@@ -378,7 +390,7 @@ void setup() {
 
   digitalWrite(RELAY1_PIN, LOW);
   digitalWrite(RELAY2_PIN, LOW);
-  digitalWrite(LIGHT_PIN,  LIGHT_OFF);
+  digitalWrite(LIGHT_PIN,  LIGHT_OFF); // Dùng constant thay vì LOW cho nhất quán
 
   setup_wifi();
 
@@ -417,12 +429,11 @@ void sub_loop_time() {
 
 // ============================================================
 //  LOOP
-// FIX 3: client.loop() luôn được gọi, không bị bỏ khi reconnect
 // ============================================================
 
 void loop() {
   if (!client.connected()) reconnect();
-  client.loop(); // luôn gọi, kể cả ngay sau reconnect
+  client.loop();
 
   handleMotion();
   handleTouch();
