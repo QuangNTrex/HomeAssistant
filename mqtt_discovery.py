@@ -100,6 +100,21 @@ def setup_espC():
         }
     )
 
+    publish_config(
+    "homeassistant/switch/espC_lcd_backlight/config",
+    {
+        "name": "LCD Backlight",
+        "command_topic": "espC/lcd/backlight/set",
+        "state_topic": "espC/lcd/backlight/state",
+        "payload_on": "ON",
+        "payload_off": "OFF",
+        "unique_id": "espC_lcd_backlight",
+        "icon": "mdi:television",
+        "device": device_espC,
+        **availability("espC")
+    }
+)
+
 # ================== ESP D ==================
 def setup_espD():
     print("=== SETUP ESP D ===")
