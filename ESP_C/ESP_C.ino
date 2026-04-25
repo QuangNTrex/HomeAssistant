@@ -11,6 +11,9 @@
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
 #include "DHT.h"
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <time.h>
 
 // ================== WIFI ==================
 const char* ssid     = "Test";
@@ -21,11 +24,16 @@ const char* mqtt_server = "192.168.0.100";
 const int   mqtt_port   = 1883;
 
 // ================== PIN ==================
-#define RELAY1  D1
-#define RELAY2  D2
-#define RELAY3  D5
-#define TOUCH   D7
-#define DHTPIN  D6
+#define TOUCH   D0   // GPIO16
+
+#define SDA_PIN D1   // LCD
+#define SCL_PIN D2   // LCD
+
+#define RELAY1  D5   // GPIO14
+#define RELAY2  D6   // GPIO12
+#define RELAY3  D7   // GPIO13
+
+#define DHTPIN  D4   // GPIO2
 #define DHTTYPE DHT22
 
 // ================== MQTT BUFFER ==================
@@ -37,8 +45,16 @@ WiFiClient   espClient;
 PubSubClient client(espClient);
 DHT          dht(DHTPIN, DHTTYPE);
 
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
 // ================== STATE ==================
 bool relayState[3] = {false, false, false};
+
+unsigned long lastLCDUpdate = 0;
+const long LCD_INTERVAL = 10000;
+
+float lastTemp = 0;
+float lastHum  = 0;
 
 // ================== TOUCH ==================
 enum TouchPhase { TOUCH_IDLE, TOUCH_COUNTING, TOUCH_HOLDING };
@@ -51,6 +67,7 @@ unsigned long lastTouchTime  = 0;
 // ================== DHT ==================
 unsigned long lastDHTRead    = 0;
 const long    DHT_INTERVAL   = 5000;
+const long    DOWN_HUMI      = 10;
 
 // ================== RECONNECT ==================
 // FIX: Non-blocking reconnect với cooldown
@@ -82,6 +99,12 @@ void setup_wifi() {
     }
   }
   log("WIFI", "Connected. IP: " + WiFi.localIP().toString());
+}
+
+// ================= TIME ======================
+void setup_time() {
+  configTime(7 * 3600, 0, "pool.ntp.org", "time.nist.gov");
+  log("TIME", "Syncing NTP...");
 }
 
 // ================== RELAY CONTROL ==================
@@ -169,20 +192,42 @@ void reconnect() {
   }
 }
 
-// ================== TOUCH (STATE MACHINE NON-BLOCKING) ==================
-/*
-  Cảm biến KY-036 / TTP223 logic:
-  - HIGH = đang chạm
-  - LOW  = không chạm
-  - INPUT_PULLUP → khi không chạm = HIGH (inverted nếu active-low)
-    → Kiểm tra lại chiều logic với phần cứng thực tế
+void handleLCD() {
+  if (millis() - lastLCDUpdate < LCD_INTERVAL) return;
+  lastLCDUpdate = millis();
 
-  State machine:
-  IDLE → COUNTING (cạnh lên LOW→HIGH)
-  COUNTING → HOLDING (giữ > 2s, touchCount==1) → shutdownAll
-  COUNTING → IDLE (timeout 500ms sau lần chạm cuối) → thực thi action
-  HOLDING → IDLE (thả tay HIGH→LOW)
-*/
+  struct tm timeinfo;
+  char line1[17];
+  char line2[17];
+
+  if (getLocalTime(&timeinfo)) {
+    snprintf(line1, sizeof(line1),
+             "%02d:%02d %02d/%02d/%02d",
+             timeinfo.tm_hour,
+             timeinfo.tm_min,
+             timeinfo.tm_mday,
+             timeinfo.tm_mon + 1,
+             (timeinfo.tm_year + 1900) % 100);
+  } else {
+    snprintf(line1, sizeof(line1), "No Time");
+  }
+
+  snprintf(line2, sizeof(line2),
+           "T:%2.0fC H:%2.0f%%",
+           lastTemp,
+           lastHum);
+
+  lcd.clear();
+
+  lcd.setCursor(0, 0);
+  lcd.print(line1);
+
+  lcd.setCursor(0, 1);
+  lcd.print(line2);
+
+  log("LCD", String(line1) + " | " + String(line2));
+}
+
 void handleTouch() {
   bool currentState = digitalRead(TOUCH);
   unsigned long now = millis();
@@ -255,6 +300,11 @@ void handleDHT() {
     return;
   }
 
+  h = h - DOWN_HUMI;
+
+  lastTemp = t;
+  lastHum  = h;
+
   log("DHT", "Temp=" + String(t, 1) + "°C  Hum=" + String(h, 1) + "%");
   safePub("espC/temp", String(t, 1).c_str());
   safePub("espC/hum",  String(h, 1).c_str());
@@ -277,6 +327,15 @@ void setup() {
   log("BOOT", "Pins initialized");
 
   setup_wifi();
+
+  Wire.begin(D1, D2);
+  lcd.init();
+  lcd.backlight();
+  lcd.clear();
+  lcd.setCursor(0,0);
+  lcd.print("Booting...");
+  delay(5000);
+  setup_time();
 
   // FIX: Tăng buffer MQTT lên 512 bytes
   client.setBufferSize(512);
@@ -314,4 +373,5 @@ void loop() {
 
   handleTouch();
   handleDHT();
+  handleLCD();
 }
