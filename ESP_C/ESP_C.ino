@@ -40,6 +40,8 @@ const int   mqtt_port   = 1883;
 // FIX: Buffer mặc định 128 bytes không đủ — tăng lên 512
 #define MQTT_MAX_PACKET_SIZE 512
 
+
+
 // ================== OBJECT ==================
 WiFiClient   espClient;
 PubSubClient client(espClient);
@@ -74,6 +76,12 @@ const long    DOWN_HUMI      = 10;
 unsigned long lastReconnectAttempt = 0;
 const unsigned long RECONNECT_INTERVAL = 5000;
 
+unsigned long lastWiFiAttempt = 0;
+const unsigned long WIFI_RECONNECT_INTERVAL = 5000;
+
+unsigned long wifiLostSince = 0;
+const unsigned long WIFI_DEAD_TIMEOUT = 60000; // 60s
+
 // ================== LOG HELPER ==================
 void log(const String& tag, const String& msg) {
   Serial.print("[");
@@ -86,8 +94,14 @@ void log(const String& tag, const String& msg) {
 
 // ================== WIFI ==================
 void setup_wifi() {
+  WiFi.setAutoReconnect(true);
+  WiFi.persistent(true);
   log("WIFI", "Connecting to: " + String(ssid));
   WiFi.begin(ssid, password);
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleepMode(WIFI_NONE_SLEEP); // 🔥 tránh sleep gây mất kết nối
+  WiFi.setAutoReconnect(true);
+  WiFi.persistent(false); // 🔥 tránh flash corruption
 
   unsigned long start = millis();
   while (WiFi.status() != WL_CONNECTED) {
@@ -310,6 +324,48 @@ void handleDHT() {
   safePub("espC/hum",  String(h, 1).c_str());
 }
 
+void handleWiFi() {
+  wl_status_t status = WiFi.status();
+
+  // ✅ Nếu đã có mạng → reset timer
+  if (status == WL_CONNECTED) {
+    wifiLostSince = 0;
+    return;
+  }
+
+  unsigned long now = millis();
+
+  // ✅ Bắt đầu tính thời gian mất mạng
+  if (wifiLostSince == 0) {
+    wifiLostSince = now;
+    log("WIFI", "Lost connection → start timer");
+  }
+
+  // 🔥 Nếu mất quá lâu → reboot
+  if (now - wifiLostSince > WIFI_DEAD_TIMEOUT) {
+    log("WIFI", "Dead >60s → REBOOT ESP");
+    ESP.restart();
+  }
+
+  // ⏱ retry có interval
+  if (now - lastWiFiAttempt < WIFI_RECONNECT_INTERVAL) return;
+  lastWiFiAttempt = now;
+
+  log("WIFI", "Reconnect attempt... status=" + String(status));
+
+  // 🔥 RESET MẠNH WiFi stack (cực quan trọng)
+  WiFi.disconnect(true);   // xóa config cũ
+  delay(100);
+
+  WiFi.mode(WIFI_OFF);
+  delay(200);
+
+  WiFi.mode(WIFI_STA);
+  delay(200);
+
+  WiFi.begin(ssid, password);
+}
+
 // ================== SETUP ==================
 void setup() {
   Serial.begin(115200);
@@ -353,23 +409,20 @@ void setup() {
 
 // ================== LOOP ==================
 void loop() {
-  // Log heap mỗi 30s để phát hiện memory leak
   static unsigned long lastHeapLog = 0;
   if (millis() - lastHeapLog > 30000) {
     lastHeapLog = millis();
-    log("HEAP", "Free heap: " + String(ESP.getFreeHeap()) + " bytes | WiFi RSSI: " + String(WiFi.RSSI()) + " dBm | MQTT: " + (client.connected() ? "OK" : "DISCONNECTED"));
+    log("HEAP", "Free heap: " + String(ESP.getFreeHeap()) +
+        " | WiFi RSSI: " + String(WiFi.RSSI()) +
+        " dBm | MQTT: " + (client.connected() ? "OK" : "DISCONNECTED"));
   }
 
-  // WiFi watchdog
-  if (WiFi.status() != WL_CONNECTED) {
-    log("WIFI", "Disconnected! Reconnecting...");
-    WiFi.reconnect();
-    delay(1000);
-    return;
-  }
+  handleWiFi();   // ✅ thay cho đoạn cũ
 
-  if (!client.connected()) reconnect();
-  client.loop();
+  if (WiFi.status() == WL_CONNECTED) {
+    if (!client.connected()) reconnect();
+    client.loop();
+  }
 
   handleTouch();
   handleDHT();

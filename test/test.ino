@@ -1,31 +1,26 @@
 #include <Wire.h>
+#include <hd44780.h>
+#include <hd44780ioClass/hd44780_I2Cexp.h>
+
+hd44780_I2Cexp lcd;
 
 void setup() {
   Serial.begin(115200);
+  delay(500);
+
+  Serial.println("Start");
+
   Wire.begin(D1, D2);
 
-  Serial.println("I2C Scanner");
+  int status = lcd.begin(16, 2);
+  Serial.print("LCD status = ");
+  Serial.println(status);
+
+  lcd.backlight();
+  lcd.clear();
+
+  lcd.setCursor(0, 0);
+  lcd.print("HELLO ESP8266");
 }
 
-void loop() {
-  byte error, address;
-  int nDevices = 0;
-
-  for(address = 1; address < 127; address++) {
-    Wire.beginTransmission(address);
-    error = Wire.endTransmission();
-
-    if(error == 0) {
-      Serial.print("Found I2C at 0x");
-      Serial.println(address, HEX);
-      nDevices++;
-    }
-  }
-
-  if(nDevices == 0) Serial.println("No I2C devices found");
-
-  delay(3000);
-}
-
-
-//test
+void loop() {}
