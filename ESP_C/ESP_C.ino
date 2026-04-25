@@ -52,11 +52,24 @@ LiquidCrystal_I2C lcd(0x27, 16, 2);
 // ================== STATE ==================
 bool relayState[3] = {false, false, false};
 
+// ================ LIGHT ====================
+bool lcdBacklight = true;
+
+unsigned long lastBacklightOn = 0;
+const unsigned long BACKLIGHT_TIMEOUT = 30000; // 30s
+
 unsigned long lastLCDUpdate = 0;
 const long LCD_INTERVAL = 10000;
 
 float lastTemp = 0;
 float lastHum  = 0;
+// ================ PAGE ====================
+int currentPage = 0;
+const int totalPages = 4;
+unsigned long lastPageUpdate = 0;
+
+unsigned long lastPageChange = 0;
+const unsigned long PAGE_INTERVAL = 5000; // 5s
 
 // ================== TOUCH ==================
 enum TouchPhase { TOUCH_IDLE, TOUCH_COUNTING, TOUCH_HOLDING };
@@ -121,6 +134,39 @@ void setup_time() {
   log("TIME", "Syncing NTP...");
 }
 
+// ================= NIGHT =====================
+
+bool isNight() {
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) return false;
+
+  int hour = timeinfo.tm_hour;
+
+  // 22h → 23h hoặc 0h → 5h
+  return (hour >= 22 || hour < 5);
+}
+
+// ================
+void setBacklight(bool state) {
+  if (lcdBacklight == state) return;
+
+  lcdBacklight = state;
+
+  if (state) {
+    lcd.backlight();
+    lastBacklightOn = millis(); // reset timer
+  } else {
+    lcd.noBacklight();
+  }
+
+  // 🔥 sync Home Assistant
+  client.publish("espC/lcd/backlight/state",
+                 state ? "ON" : "OFF",
+                 true);
+
+  log("LCD", String("Backlight → ") + (state ? "ON" : "OFF"));
+}
+
 // ================== RELAY CONTROL ==================
 void publishRelayState(int relay) {
   String topic = "espC/relay" + String(relay + 1) + "/state";
@@ -178,6 +224,13 @@ void callback(char* topic, byte* payload, unsigned int length) {
     else if (msg == "OFF")    turnOffRelay(2);
     else if (msg == "TOGGLE") toggleRelay(2);
   }
+  else if (t == "espC/lcd/backlight/set") {
+    if (msg == "ON") {
+      setBacklight(true);
+    } else if (msg == "OFF") {
+      setBacklight(false);
+    }
+  }
 }
 
 // ================== MQTT RECONNECT (NON-BLOCKING) ==================
@@ -197,6 +250,11 @@ void reconnect() {
     client.subscribe("espC/relay1/set");
     client.subscribe("espC/relay2/set");
     client.subscribe("espC/relay3/set");
+    client.subscribe("espC/lcd/backlight/set");
+
+    client.publish("espC/lcd/backlight/state",
+               lcdBacklight ? "ON" : "OFF",
+               true);
     log("MQTT", "Subscribed to relay topics");
   } else {
     log("MQTT", "Failed, rc=" + String(client.state()) + " — retry in " + String(RECONNECT_INTERVAL/1000) + "s");
@@ -206,41 +264,176 @@ void reconnect() {
   }
 }
 
-void handleLCD() {
-  if (millis() - lastLCDUpdate < LCD_INTERVAL) return;
-  lastLCDUpdate = millis();
+void handlePage() {
+  if (millis() - lastPageChange > PAGE_INTERVAL) {
+    currentPage = (currentPage + 1) % totalPages;
+    lastPageChange = millis();
+  }
+}
 
+void pageClock() {
   struct tm timeinfo;
   char line1[17];
   char line2[17];
 
   if (getLocalTime(&timeinfo)) {
     snprintf(line1, sizeof(line1),
-             "%02d:%02d %02d/%02d/%02d",
+             "%02d:%02d %02d/%02d",
              timeinfo.tm_hour,
              timeinfo.tm_min,
              timeinfo.tm_mday,
-             timeinfo.tm_mon + 1,
-             (timeinfo.tm_year + 1900) % 100);
+             timeinfo.tm_mon + 1);
   } else {
     snprintf(line1, sizeof(line1), "No Time");
   }
 
   snprintf(line2, sizeof(line2),
            "T:%2.0fC H:%2.0f%%",
-           lastTemp,
-           lastHum);
+           lastTemp, lastHum);
 
-  lcd.clear();
+  lcd.setCursor(0,0); lcd.print(line1);
+  lcd.setCursor(0,1); lcd.print(line2);
+}
 
-  lcd.setCursor(0, 0);
+void pageRelay() {
+  char line1[17];
+  char line2[17];
+
+  snprintf(line1, sizeof(line1),
+           "R1:%s R2:%s",
+           relayState[0] ? "ON" : "OFF",
+           relayState[1] ? "ON" : "OFF");
+
+  snprintf(line2, sizeof(line2),
+           "R3:%s",
+           relayState[2] ? "ON" : "OFF");
+
+  lcd.setCursor(0,0); lcd.print(line1);
+  lcd.setCursor(0,1); lcd.print(line2);
+}
+
+void pageSystem() {
+  char line1[17];
+  char line2[17];
+
+  snprintf(line1, sizeof(line1),
+           "WiFi:%ddBm", WiFi.RSSI());
+
+  snprintf(line2, sizeof(line2),
+           "MQTT:%s",
+           client.connected() ? "OK" : "FAIL");
+
+  lcd.setCursor(0,0); lcd.print(line1);
+  lcd.setCursor(0,1); lcd.print(line2);
+}
+
+int menuIndex = 0;
+
+void pageMenu() {
+  const char* items[] = {
+    "Toggle R1",
+    "Toggle R2",
+    "Backlight"
+  };
+
+  lcd.setCursor(0,0);
+  lcd.print(">");
+  lcd.print(items[menuIndex]);
+
+  lcd.setCursor(0,1);
+  lcd.print("Hold=Select");
+}
+
+void autoChangePage() {
+  if (millis() - lastPageUpdate >= PAGE_INTERVAL) {
+    currentPage = (currentPage + 1) % totalPages;
+    lastPageUpdate = millis();
+  }
+}
+
+void pageGreeting() {
+  struct tm timeinfo;
+  char line1[17];
+  char line2[17];
+
+  const char* greet;
+
+  if (getLocalTime(&timeinfo)) {
+    int h = timeinfo.tm_hour;
+
+    if (h < 12) greet = "Chao buoi sang";
+    else if (h < 18) greet = "Chao buoi chieu";
+    else greet = "Chao buoi toi";
+  } else {
+    greet = "Xin chao";
+  }
+
+  snprintf(line1, sizeof(line1), "%s", greet);
+  snprintf(line2, sizeof(line2), "Quang");
+
+  lcd.setCursor(0,0);
   lcd.print(line1);
 
-  lcd.setCursor(0, 1);
+  lcd.setCursor(0,1);
   lcd.print(line2);
-
-  log("LCD", String(line1) + " | " + String(line2));
 }
+
+// ============================================
+
+void handleLCD() {
+  if (millis() - lastLCDUpdate < LCD_INTERVAL) return;
+  lastLCDUpdate = millis();
+  static int lastPage = -1;
+
+  if (currentPage != lastPage) {
+    lcd.clear();
+    lastPage = currentPage;
+  }
+
+  switch(currentPage) {
+    case 0: pageClock(); break;
+    case 1: pageRelay(); break;
+    case 2: pageSystem(); break;
+    case 3: pageGreeting(); break;
+  }
+}
+
+// void handleLCD() {
+//   if (millis() - lastLCDUpdate < LCD_INTERVAL) return;
+//   lastLCDUpdate = millis();
+
+//   struct tm timeinfo;
+//   char line1[17];
+//   char line2[17];
+
+//   if (getLocalTime(&timeinfo)) {
+//     snprintf(line1, sizeof(line1),
+//              "%02d:%02d %02d/%02d/%02d",
+//              timeinfo.tm_hour,
+//              timeinfo.tm_min,
+//              timeinfo.tm_mday,
+//              timeinfo.tm_mon + 1,
+//              (timeinfo.tm_year + 1900) % 100);
+//   } else {
+//     snprintf(line1, sizeof(line1), "No Time");
+//   }
+
+//   snprintf(line2, sizeof(line2),
+//            "T:%2.0fC H:%2.0f%%",
+//            lastTemp,
+//            lastHum);
+
+//   // 🔥 đảo chữ (simulate rotate)
+
+//   lcd.clear();
+
+//   // 🔥 đảo dòng (line1 xuống dưới)
+//   lcd.setCursor(0, 1);
+//   lcd.print(line1);
+
+//   lcd.setCursor(0, 0);
+//   lcd.print(line2);
+// }
 
 void handleTouch() {
   bool currentState = digitalRead(TOUCH);
@@ -288,7 +481,7 @@ void handleTouch() {
 
     log("TOUCH", "Execute tap action, count=" + String(touchCount));
 
-    if      (touchCount == 1) { toggleRelay(0); log("TOUCH", "1 tap → toggle relay1 (local)"); }
+    if      (touchCount == 1) { toggleRelay(0); log("TOUCH", "1 tap → toggle relay1 (local)"); setBacklight(true); }
     else if (touchCount == 2) { safePub("espD/relay1/set", "TOGGLE"); log("TOUCH", "2 tap → toggle espD/relay1 (quat)"); }
     else if (touchCount == 3) { safePub("espD/servo1/set", "TOGGLE"); log("TOUCH", "3 tap → toggle espD/servo1 (den chinh)"); }
     else if (touchCount == 4) { toggleRelay(1); log("TOUCH", "4 tap → toggle relay2 (man hinh)"); }
@@ -366,6 +559,19 @@ void handleWiFi() {
   WiFi.begin(ssid, password);
 }
 
+void handleBacklightAutoOff() {
+  return;
+  if (!lcdBacklight) return;
+
+  // chỉ áp dụng ban đêm
+  if (!isNight()) return;
+
+  if (millis() - lastBacklightOn > BACKLIGHT_TIMEOUT) {
+    log("LCD", "Auto OFF (night mode)");
+    setBacklight(false);
+  }
+}
+
 // ================== SETUP ==================
 void setup() {
   Serial.begin(115200);
@@ -427,4 +633,6 @@ void loop() {
   handleTouch();
   handleDHT();
   handleLCD();
+  handleBacklightAutoOff();
+  handlePage();
 }
