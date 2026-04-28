@@ -26,9 +26,6 @@ def on_connect(client, userdata, flags, rc):
 client.on_connect = on_connect
 
 # ================== LWT ==================
-client.will_set("espD/status", "offline", retain=True)
-client.will_set("espC/status", "offline", retain=True)
-
 client.connect(BROKER, PORT, 60)
 
 # ================== HELPER ==================

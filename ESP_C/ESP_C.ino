@@ -1,13 +1,3 @@
-/*
- * ESP_C — Fixed Version
- * Fixes:
- *  1. reconnect() non-blocking (không dùng while-loop)
- *  2. MQTT buffer tăng lên 512 bytes
- *  3. setKeepAlive(60) để tránh broker ngắt kết nối khi xử lý touch/relay
- *  4. Serial logging đầy đủ để debug
- *  5. Touch debounce ổn định hơn
- */
-
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
 #include "DHT.h"
@@ -59,7 +49,7 @@ unsigned long lastBacklightOn = 0;
 const unsigned long BACKLIGHT_TIMEOUT = 30000; // 30s
 
 unsigned long lastLCDUpdate = 0;
-const long LCD_INTERVAL = 10000;
+const long LCD_INTERVAL = 5000;
 
 float lastTemp = 0;
 float lastHum  = 0;
@@ -108,7 +98,6 @@ void log(const String& tag, const String& msg) {
 // ================== WIFI ==================
 void setup_wifi() {
   WiFi.setAutoReconnect(true);
-  WiFi.persistent(true);
   log("WIFI", "Connecting to: " + String(ssid));
   WiFi.begin(ssid, password);
   WiFi.mode(WIFI_STA);
@@ -288,7 +277,7 @@ void pageClock() {
   }
 
   snprintf(line2, sizeof(line2),
-           "T:%2.0fC H:%2.0f%%",
+           "T:%2.1fC H:%2.1f%%",
            lastTemp, lastHum);
 
   lcd.setCursor(0,0); lcd.print(line1);
@@ -344,38 +333,57 @@ void pageMenu() {
   lcd.print("Hold=Select");
 }
 
-void autoChangePage() {
-  if (millis() - lastPageUpdate >= PAGE_INTERVAL) {
-    currentPage = (currentPage + 1) % totalPages;
-    lastPageUpdate = millis();
-  }
-}
-
 void pageGreeting() {
   struct tm timeinfo;
   char line1[17];
   char line2[17];
 
   const char* greet;
+  const char* greet2;
 
   if (getLocalTime(&timeinfo)) {
     int h = timeinfo.tm_hour;
 
-    if (h < 12) greet = "Chao buoi sang";
-    else if (h < 18) greet = "Chao buoi chieu";
-    else greet = "Chao buoi toi";
-  } else {
-    greet = "Xin chao";
+  if (h >= 5 && h < 7) greet = "Early morning";
+  else if (h >= 7 && h < 10) greet = "Active morning";
+  else if (h >= 10 && h < 12) greet = "Almost noon";
+  else if (h < 18) greet = "Peaceful afternoon";
+  else greet = "Calm night";
+  if (timeinfo.tm_wday == 0) {
+    if (h < 12) greet = "Slow Sunday morning";
+    else greet = "Relaxing Sunday";
   }
 
+  const char* msgs[] = {
+    "don forget drink",
+    "time to relaxing",
+    "today is begin",
+    "welcome Quang!"
+  };
+
+  greet2 = msgs[random(0, 4)];
+  } else {
+    greet = "Xin chao :3";
+    greet2 = "Nguyen Tien Quang <3";
+  }
+
+
+
   snprintf(line1, sizeof(line1), "%s", greet);
-  snprintf(line2, sizeof(line2), "Quang");
+  snprintf(line2, sizeof(line2), "%s", greet2);
 
   lcd.setCursor(0,0);
   lcd.print(line1);
 
   lcd.setCursor(0,1);
   lcd.print(line2);
+}
+
+void autoChangePage() {
+  if (millis() - lastPageUpdate >= PAGE_INTERVAL) {
+    currentPage = (currentPage + 1) % totalPages;
+    lastPageUpdate = millis();
+  }
 }
 
 // ============================================
@@ -397,43 +405,6 @@ void handleLCD() {
     case 3: pageGreeting(); break;
   }
 }
-
-// void handleLCD() {
-//   if (millis() - lastLCDUpdate < LCD_INTERVAL) return;
-//   lastLCDUpdate = millis();
-
-//   struct tm timeinfo;
-//   char line1[17];
-//   char line2[17];
-
-//   if (getLocalTime(&timeinfo)) {
-//     snprintf(line1, sizeof(line1),
-//              "%02d:%02d %02d/%02d/%02d",
-//              timeinfo.tm_hour,
-//              timeinfo.tm_min,
-//              timeinfo.tm_mday,
-//              timeinfo.tm_mon + 1,
-//              (timeinfo.tm_year + 1900) % 100);
-//   } else {
-//     snprintf(line1, sizeof(line1), "No Time");
-//   }
-
-//   snprintf(line2, sizeof(line2),
-//            "T:%2.0fC H:%2.0f%%",
-//            lastTemp,
-//            lastHum);
-
-//   // 🔥 đảo chữ (simulate rotate)
-
-//   lcd.clear();
-
-//   // 🔥 đảo dòng (line1 xuống dưới)
-//   lcd.setCursor(0, 1);
-//   lcd.print(line1);
-
-//   lcd.setCursor(0, 0);
-//   lcd.print(line2);
-// }
 
 void handleTouch() {
   bool currentState = digitalRead(TOUCH);
@@ -623,7 +594,7 @@ void loop() {
         " dBm | MQTT: " + (client.connected() ? "OK" : "DISCONNECTED"));
   }
 
-  handleWiFi();   // ✅ thay cho đoạn cũ
+  handleWiFi();
 
   if (WiFi.status() == WL_CONNECTED) {
     if (!client.connected()) reconnect();
