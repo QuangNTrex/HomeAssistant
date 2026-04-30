@@ -1,31 +1,53 @@
 import paho.mqtt.client as mqtt
 import json
 import time
+import threading
 
+# ================== CONFIG ==================
 BROKER = "192.168.0.100"
 PORT = 1883
 
-client = mqtt.Client()
-
 connected = False
 
-# ================== CONNECT ==================
-def on_connect(client, userdata, flags, rc):
+HEARTBEAT_INTERVAL = 30
+
+# ================== MQTT CLIENT ==================
+client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+client.reconnect_delay_set(min_delay=1, max_delay=10)
+
+# ================== CALLBACK ==================
+def on_connect(client, userdata, flags, rc, properties=None):
     global connected
     if rc == 0:
-        print("Connected to MQTT")
+        print("[MQTT] Connected")
         connected = True
     else:
-        print("MQTT connect failed:", rc)
+        print("[MQTT] Connect failed:", rc)
+
+def on_disconnect(client, userdata, rc, properties=None):
+    global connected
+    print("[MQTT] Disconnected:", rc)
+    connected = False
 
 client.on_connect = on_connect
+client.on_disconnect = on_disconnect
 
-# ================== HELPER ==================
+# ================== SAFE PUBLISH ==================
+def safe_publish(topic, payload, retain=True):
+    if not client.is_connected():
+        return False
+
+    try:
+        result = client.publish(topic, payload, retain=retain)
+        return result.rc == mqtt.MQTT_ERR_SUCCESS
+    except Exception as e:
+        print("[MQTT] Publish error:", e)
+        return False
+
 def publish_config(topic, payload):
-    print("Publishing:", topic)
-    client.publish(topic, json.dumps(payload), retain=True)
+    safe_publish(topic, json.dumps(payload), retain=True)
 
-# ================== DEVICE ==================
+# ================== DEVICE INFO ==================
 device_espC = {
     "identifiers": ["espC"],
     "name": "ESP C",
@@ -40,20 +62,9 @@ device_espD = {
     "manufacturer": "Custom"
 }
 
-# ================== HEARTBEAT CONFIG ==================
-def heartbeat(device):
-    return {
-        "state_topic": f"{device}/heartbeat",
-        "name": "Heartbeat",
-        "unique_id": f"{device}_heartbeat",
-        "device": device_espC if device == "espC" else device_espD,
-        "icon": "mdi:heart-pulse"
-    }
-
 # ================== ESP C ==================
 def setup_espC():
 
-    # RELAY
     for i in range(1, 4):
         publish_config(
             f"homeassistant/switch/espC_relay{i}/config",
@@ -68,7 +79,6 @@ def setup_espC():
             }
         )
 
-    # TEMP
     publish_config(
         "homeassistant/sensor/espC_temp/config",
         {
@@ -80,7 +90,6 @@ def setup_espC():
         }
     )
 
-    # HUM
     publish_config(
         "homeassistant/sensor/espC_hum/config",
         {
@@ -92,7 +101,6 @@ def setup_espC():
         }
     )
 
-    # LCD BACKLIGHT
     publish_config(
         "homeassistant/switch/espC_lcd_backlight/config",
         {
@@ -107,7 +115,6 @@ def setup_espC():
         }
     )
 
-    # HEARTBEAT (IMPORTANT)
     publish_config(
         "homeassistant/sensor/espC_heartbeat/config",
         {
@@ -118,7 +125,6 @@ def setup_espC():
             "icon": "mdi:heart-pulse"
         }
     )
-
 
 # ================== ESP D ==================
 def setup_espD():
@@ -188,7 +194,6 @@ def setup_espD():
         }
     )
 
-    # HEARTBEAT
     publish_config(
         "homeassistant/sensor/espD_heartbeat/config",
         {
@@ -200,8 +205,20 @@ def setup_espD():
         }
     )
 
+# ================== HEARTBEAT LOOP ==================
+def heartbeat_loop():
+    while True:
+        if connected:
+            ts = str(int(time.time()))
 
-# ================== MAIN ==================
+            safe_publish("espC/heartbeat", ts, True)
+            safe_publish("espD/heartbeat", ts, True)
+            safe_publish("system/mqtt/status", "online", True)
+
+        time.sleep(HEARTBEAT_INTERVAL)
+
+# ================== START ==================
+client.connect(BROKER, PORT, 60)
 client.loop_start()
 
 while not connected:
@@ -210,13 +227,16 @@ while not connected:
 setup_espC()
 setup_espD()
 
-print("MQTT Discovery config sent!")
+print("[SYSTEM] MQTT Discovery Ready")
 
+threading.Thread(target=heartbeat_loop, daemon=True).start()
+
+# ================== MAIN LOOP ==================
 while True:
     if not client.is_connected():
         try:
             client.reconnect()
-        except:
-            pass
+        except Exception as e:
+            print("[MQTT] reconnect failed:", e)
 
     time.sleep(5)
