@@ -53,13 +53,21 @@ const long LCD_INTERVAL = 5000;
 
 float lastTemp = 0;
 float lastHum  = 0;
-// ================ PAGE ====================
-int currentPage = 0;
-const int totalPages = 4;
-unsigned long lastPageUpdate = 0;
 
-unsigned long lastPageChange = 0;
-const unsigned long PAGE_INTERVAL = 5000; // 5s
+// ================ PAGE ====================
+int lastPage = -1; // page đang hiển thị trước đó
+
+enum Page { PAGE_CLOCK = 0, PAGE_GREETING = 1, PAGE_SYSTEM = 2, PAGE_EVENT = 3 };
+int currentPage = PAGE_CLOCK;
+
+unsigned long lastPageUpdate = 0;
+const unsigned long PAGE_INTERVAL = 8000; // 8s clock ↔ greeting
+
+// Page event
+String eventLine1 = "";
+String eventLine2 = "";
+unsigned long eventShownAt   = 0;  // thời điểm event/system được kích hoạt
+const unsigned long RETURN_TO_CLOCK = 8000; // 5s rồi về clock
 
 // ================== TOUCH ==================
 enum TouchPhase { TOUCH_IDLE, TOUCH_COUNTING, TOUCH_HOLDING };
@@ -84,6 +92,9 @@ const unsigned long WIFI_RECONNECT_INTERVAL = 5000;
 
 unsigned long wifiLostSince = 0;
 const unsigned long WIFI_DEAD_TIMEOUT = 60000; // 60s
+
+unsigned long lastStatusPub = 0;
+const unsigned long STATUS_INTERVAL = 30000; // 30s
 
 // ================== LOG HELPER ==================
 void log(const String& tag, const String& msg) {
@@ -149,11 +160,31 @@ void setBacklight(bool state) {
   }
 
   // 🔥 sync Home Assistant
-  client.publish("espC/lcd/backlight/state",
-                 state ? "ON" : "OFF",
-                 true);
+  safePub("espC/lcd/backlight/state", state ? "ON" : "OFF", true);
+  // client.publish("espC/lcd/backlight/state",
+  //                state ? "ON" : "OFF",
+  //                true);
 
   log("LCD", String("Backlight → ") + (state ? "ON" : "OFF"));
+}
+
+void toggleBacklight() {
+  lcdBacklight = !lcdBacklight;
+
+  if (lcdBacklight) {
+    lcd.backlight();
+    lastBacklightOn = millis(); // reset timer
+  } else {
+    lcd.noBacklight();
+  }
+
+  // 🔥 sync Home Assistant
+  safePub("espC/lcd/backlight/state", lcdBacklight ? "ON" : "OFF", true);
+  // client.publish("espC/lcd/backlight/state",
+  //                lcdBacklight ? "ON" : "OFF",
+  //                true);
+
+  log("LCD", String("Backlight → ") + (lcdBacklight ? "ON" : "OFF"));
 }
 
 // ================== RELAY CONTROL ==================
@@ -179,6 +210,18 @@ void toggleRelay(int relay)  { setRelay(relay, !relayState[relay]); }
 void turnOnRelay(int relay)  { setRelay(relay, true);  }
 void turnOffRelay(int relay) { setRelay(relay, false); }
 
+///////////////////////////////
+
+void showEvent(const String& l1, const String& l2) {
+  eventLine1 = l1.substring(0, 16); // giới hạn 16 ký tự LCD
+  eventLine2 = l2.substring(0, 16);
+  currentPage  = PAGE_EVENT;
+  eventShownAt = millis();
+  lastLCDUpdate = 0; // force render ngay lập tức
+  lcd.clear();
+  log("EVENT", l1 + " | " + l2);
+}
+
 // ================== MQTT PUBLISH HELPER ==================
 bool safePub(const char* topic, const char* payload) {
   if (!client.connected()) {
@@ -186,6 +229,16 @@ bool safePub(const char* topic, const char* payload) {
     return false;
   }
   bool ok = client.publish(topic, payload);
+  log("MQTT", "Publish " + String(topic) + " = " + String(payload) + (ok ? " OK" : " FAIL (check buffer size)"));
+  return ok;
+}
+
+bool safePub(const char* topic, const char* payload, bool retain) {
+  if (!client.connected()) {
+    log("MQTT", "Publish skipped (disconnected): " + String(topic));
+    return false;
+  }
+  bool ok = client.publish(topic, payload, retain);
   log("MQTT", "Publish " + String(topic) + " = " + String(payload) + (ok ? " OK" : " FAIL (check buffer size)"));
   return ok;
 }
@@ -198,27 +251,24 @@ void callback(char* topic, byte* payload, unsigned int length) {
   log("MQTT", "Received: " + t + " = " + msg);
 
   if (t == "espC/relay1/set") {
-    if      (msg == "ON")     turnOnRelay(0);
-    else if (msg == "OFF")    turnOffRelay(0);
-    else if (msg == "TOGGLE") toggleRelay(0);
+    if      (msg == "ON")     { turnOnRelay(0);  showEvent("Relay 1", "Turned ON");  }
+    else if (msg == "OFF")    { turnOffRelay(0); showEvent("Relay 1", "Turned OFF"); }
+    else if (msg == "TOGGLE") { toggleRelay(0);  showEvent("Relay 1", relayState[0] ? "-> ON" : "-> OFF"); }
     else log("MQTT", "Unknown command: " + msg);
   }
   else if (t == "espC/relay2/set") {
-    if      (msg == "ON")     turnOnRelay(1);
-    else if (msg == "OFF")    turnOffRelay(1);
-    else if (msg == "TOGGLE") toggleRelay(1);
+    if      (msg == "ON")     { turnOnRelay(1);  showEvent("Relay 2", "Turned ON");  }
+    else if (msg == "OFF")    { turnOffRelay(1); showEvent("Relay 2", "Turned OFF"); }
+    else if (msg == "TOGGLE") { toggleRelay(1);  showEvent("Relay 2", relayState[1] ? "-> ON" : "-> OFF"); }
   }
   else if (t == "espC/relay3/set") {
-    if      (msg == "ON")     turnOnRelay(2);
-    else if (msg == "OFF")    turnOffRelay(2);
-    else if (msg == "TOGGLE") toggleRelay(2);
+    if      (msg == "ON")     { turnOnRelay(2);  showEvent("Relay 3", "Turned ON");  }
+    else if (msg == "OFF")    { turnOffRelay(2); showEvent("Relay 3", "Turned OFF"); }
+    else if (msg == "TOGGLE") { toggleRelay(2);  showEvent("Relay 3", relayState[2] ? "-> ON" : "-> OFF"); }
   }
   else if (t == "espC/lcd/backlight/set") {
-    if (msg == "ON") {
-      setBacklight(true);
-    } else if (msg == "OFF") {
-      setBacklight(false);
-    }
+    if      (msg == "ON")  { setBacklight(true);  showEvent("Backlight", "Turned ON");  }
+    else if (msg == "OFF") { setBacklight(false); showEvent("Backlight", "Turned OFF"); }
   }
 }
 
@@ -253,25 +303,20 @@ void reconnect() {
   }
 }
 
-void handlePage() {
-  if (millis() - lastPageChange > PAGE_INTERVAL) {
-    currentPage = (currentPage + 1) % totalPages;
-    lastPageChange = millis();
-  }
-}
-
 void pageClock() {
   struct tm timeinfo;
   char line1[17];
   char line2[17];
 
   if (getLocalTime(&timeinfo)) {
+    const char* days[] = {"CN", "Th2", "Th3", "Th4", "Th5", "Th6", "Th7"};
     snprintf(line1, sizeof(line1),
-             "%02d:%02d %02d/%02d",
-             timeinfo.tm_hour,
-             timeinfo.tm_min,
-             timeinfo.tm_mday,
-             timeinfo.tm_mon + 1);
+            "%s %02d:%02d %02d/%02d",
+            days[timeinfo.tm_wday],
+            timeinfo.tm_hour,
+            timeinfo.tm_min,
+            timeinfo.tm_mday,
+            timeinfo.tm_mon + 1);
   } else {
     snprintf(line1, sizeof(line1), "No Time");
   }
@@ -279,23 +324,6 @@ void pageClock() {
   snprintf(line2, sizeof(line2),
            "T:%2.1fC H:%2.1f%%",
            lastTemp, lastHum);
-
-  lcd.setCursor(0,0); lcd.print(line1);
-  lcd.setCursor(0,1); lcd.print(line2);
-}
-
-void pageRelay() {
-  char line1[17];
-  char line2[17];
-
-  snprintf(line1, sizeof(line1),
-           "R1:%s R2:%s",
-           relayState[0] ? "ON" : "OFF",
-           relayState[1] ? "ON" : "OFF");
-
-  snprintf(line2, sizeof(line2),
-           "R3:%s",
-           relayState[2] ? "ON" : "OFF");
 
   lcd.setCursor(0,0); lcd.print(line1);
   lcd.setCursor(0,1); lcd.print(line2);
@@ -316,94 +344,120 @@ void pageSystem() {
   lcd.setCursor(0,1); lcd.print(line2);
 }
 
-int menuIndex = 0;
-
-void pageMenu() {
-  const char* items[] = {
-    "Toggle R1",
-    "Toggle R2",
-    "Backlight"
-  };
-
-  lcd.setCursor(0,0);
-  lcd.print(">");
-  lcd.print(items[menuIndex]);
-
-  lcd.setCursor(0,1);
-  lcd.print("Hold=Select");
+// ================== PAGE EVENT ==================
+void pageEvent() {
+  lcd.setCursor(0, 0); lcd.print(eventLine1);
+  lcd.setCursor(0, 1); lcd.print(eventLine2);
 }
 
 void pageGreeting() {
-  struct tm timeinfo;
-  char line1[17];
-  char line2[17];
+  static int  enteredFromPage = -1;
+  static char savedGreet[17]  = "";
+  static char savedGreet2[17] = "";
 
-  const char* greet;
-  const char* greet2;
+  // Tính lại nếu vừa chuyển từ page khác sang Greeting
+  if (lastPage != PAGE_GREETING) {
+    struct tm timeinfo;
+    if (getLocalTime(&timeinfo)) {
+      int h = timeinfo.tm_hour;
 
-  if (getLocalTime(&timeinfo)) {
-    int h = timeinfo.tm_hour;
+      const char* greet;
+      if      (h >= 5  && h < 7)  greet = "Early morning";
+      else if (h >= 7  && h < 10) greet = "Active morning";
+      else if (h >= 10 && h < 12) greet = "Almost noon";
+      else if (h < 18)            greet = "Peaceful aftnoon";
+      else                        greet = "Calm night";
 
-  if (h >= 5 && h < 7) greet = "Early morning";
-  else if (h >= 7 && h < 10) greet = "Active morning";
-  else if (h >= 10 && h < 12) greet = "Almost noon";
-  else if (h < 18) greet = "Peaceful afternoon";
-  else greet = "Calm night";
-  if (timeinfo.tm_wday == 0) {
-    if (h < 12) greet = "Slow Sunday morning";
-    else greet = "Relaxing Sunday";
+      if (timeinfo.tm_wday == 0)
+        greet = (h < 12) ? "Slow Sun morning" : "Relaxing Sunday";
+
+      const char* msgs[] = {
+        "don forget drink",
+        "time to relaxing",
+        "today is begin",
+        "welcome Quang!"
+      };
+
+      strncpy(savedGreet,  greet,             16); savedGreet[16]  = '\0';
+      strncpy(savedGreet2, msgs[random(0, 4)], 16); savedGreet2[16] = '\0';
+    } else {
+      strncpy(savedGreet,  "Xin chao :3",  16); savedGreet[16]  = '\0';
+      strncpy(savedGreet2, "Tien Quang <3", 16); savedGreet2[16] = '\0';
+    }
   }
 
-  const char* msgs[] = {
-    "don forget drink",
-    "time to relaxing",
-    "today is begin",
-    "welcome Quang!"
-  };
-
-  greet2 = msgs[random(0, 4)];
-  } else {
-    greet = "Xin chao :3";
-    greet2 = "Nguyen Tien Quang <3";
-  }
-
-
-
-  snprintf(line1, sizeof(line1), "%s", greet);
-  snprintf(line2, sizeof(line2), "%s", greet2);
-
-  lcd.setCursor(0,0);
-  lcd.print(line1);
-
-  lcd.setCursor(0,1);
-  lcd.print(line2);
+  lcd.setCursor(0, 0); lcd.print(savedGreet);
+  lcd.setCursor(0, 1); lcd.print(savedGreet2);
 }
-
-void autoChangePage() {
-  if (millis() - lastPageUpdate >= PAGE_INTERVAL) {
-    currentPage = (currentPage + 1) % totalPages;
-    lastPageUpdate = millis();
-  }
-}
-
-// ============================================
 
 void handleLCD() {
-  if (millis() - lastLCDUpdate < LCD_INTERVAL) return;
-  lastLCDUpdate = millis();
-  static int lastPage = -1;
+  unsigned long now = millis();
+  // static int lastPage = -1;
 
+  // --- Logic tự động chuyển page ---
+
+  // EVENT & SYSTEM: sau 5s về CLOCK
+  if ((currentPage == PAGE_EVENT || currentPage == PAGE_SYSTEM)
+      && eventShownAt != 0
+      && (now - eventShownAt >= RETURN_TO_CLOCK)) {
+    currentPage   = PAGE_CLOCK;
+    lastPageUpdate = now;
+    eventShownAt  = 0;
+    lcd.clear();
+    lastPage = -1;
+  }
+
+  // CLOCK → GREETING sau 5s
+  if (currentPage == PAGE_CLOCK
+      && (now - lastPageUpdate >= PAGE_INTERVAL)) {
+    currentPage    = PAGE_GREETING;
+    lastPageUpdate = now;
+    lcd.clear();
+    lastPage = -1;
+  }
+  // GREETING → CLOCK sau 5s
+  else if (currentPage == PAGE_GREETING
+           && (now - lastPageUpdate >= PAGE_INTERVAL)) {
+    currentPage    = PAGE_CLOCK;
+    lastPageUpdate = now;
+    lcd.clear();
+    lastPage = -1;
+  }
+
+  // --- Throttle render ---
+  if (now - lastLCDUpdate < 500) return; // render mỗi 0.5s (clock cần cập nhật phút)
+  lastLCDUpdate = now;
+
+  // Clear khi đổi page
   if (currentPage != lastPage) {
     lcd.clear();
-    lastPage = currentPage;
   }
 
-  switch(currentPage) {
-    case 0: pageClock(); break;
-    case 1: pageRelay(); break;
-    case 2: pageSystem(); break;
-    case 3: pageGreeting(); break;
+  switch (currentPage) {
+    case PAGE_CLOCK:    pageClock();    break;
+    case PAGE_GREETING: pageGreeting(); break;
+    case PAGE_SYSTEM:   pageSystem();   break;
+    case PAGE_EVENT:    pageEvent();    break;
   }
+
+  lastPage = currentPage;
+}
+
+void handleHold() {
+  toggleBacklight();
+  log("TOUCH", "HOLD detected → TOGGLE backlight");
+}
+
+void singleTouch() {
+
+}
+
+void doubleTouch() {
+
+}
+
+void tripleTouch() {
+
 }
 
 void handleTouch() {
@@ -431,10 +485,9 @@ void handleTouch() {
       && touchCount == 1
       && (now - touchStartTime > 2000)) {
 
-    log("TOUCH", "HOLD detected → TOGGLE espD/servo2 (den bep)");
+    handleHold();
     touchPhase = TOUCH_HOLDING;
     touchCount = 0;
-    safePub("espD/servo2/set", "TOGGLE");
   }
 
   // Phát hiện thả tay (cạnh xuống: HIGH → LOW)
@@ -452,10 +505,22 @@ void handleTouch() {
 
     log("TOUCH", "Execute tap action, count=" + String(touchCount));
 
-    if      (touchCount == 1) { toggleRelay(0); log("TOUCH", "1 tap → toggle relay1 (local)"); setBacklight(true); }
-    else if (touchCount == 2) { safePub("espD/relay1/set", "TOGGLE"); log("TOUCH", "2 tap → toggle espD/relay1 (quat)"); }
-    else if (touchCount == 3) { safePub("espD/servo1/set", "TOGGLE"); log("TOUCH", "3 tap → toggle espD/servo1 (den chinh)"); }
-    else if (touchCount == 4) { toggleRelay(1); log("TOUCH", "4 tap → toggle relay2 (man hinh)"); }
+    // if      (touchCount == 1) { toggleRelay(0); log("TOUCH", "1 tap → toggle relay1 (local)"); setBacklight(true); }
+    if (touchCount == 1) {
+      // Cycle qua 3 pages: CLOCK(0) → GREETING(1) → SYSTEM(2) → CLOCK(0)
+      // Từ EVENT hoặc bất kỳ page nào cũng bước tiếp theo chu kỳ
+      int next = (currentPage == PAGE_EVENT)
+                ? PAGE_CLOCK
+                : (currentPage + 1) % 3; // chỉ cycle trong 0,1,2
+      currentPage    = next;
+      lastPageUpdate = millis();
+      eventShownAt   = (next == PAGE_SYSTEM) ? millis() : 0; // SYSTEM dùng timer về clock
+      lcd.clear();
+      setBacklight(true);
+      log("TOUCH", "1 tap → page " + String(currentPage));
+    }
+    else if (touchCount == 2) { toggleRelay(0); log("TOUCH", "2 tap → toggle relay1 (local)"); showEvent("Tap Relay 1", relayState[0] ? "Turned ON" : "Turned OFF");} // bật đèn
+    else if (touchCount == 3) { toggleRelay(1); log("TOUCH", "3 tap → toggle relay2 (man hinh)");  showEvent("Tap Relay 2", relayState[1] ? "Turned ON" : "Turned OFF"); } // bật màn hình
     else { log("TOUCH", "No action for count=" + String(touchCount)); }
 
     touchCount = 0;
@@ -530,19 +595,6 @@ void handleWiFi() {
   WiFi.begin(ssid, password);
 }
 
-void handleBacklightAutoOff() {
-  return;
-  if (!lcdBacklight) return;
-
-  // chỉ áp dụng ban đêm
-  if (!isNight()) return;
-
-  if (millis() - lastBacklightOn > BACKLIGHT_TIMEOUT) {
-    log("LCD", "Auto OFF (night mode)");
-    setBacklight(false);
-  }
-}
-
 // ================== SETUP ==================
 void setup() {
   Serial.begin(115200);
@@ -599,11 +651,15 @@ void loop() {
   if (WiFi.status() == WL_CONNECTED) {
     if (!client.connected()) reconnect();
     client.loop();
+    // giữ mqtt luôn sống
+    if (client.connected() && millis() - lastStatusPub > STATUS_INTERVAL) {
+      lastStatusPub = millis();
+      client.publish("espC/status", "online", true);
+      log("MQTT", "Heartbeat published");
+    }
   }
 
   handleTouch();
   handleDHT();
   handleLCD();
-  handleBacklightAutoOff();
-  handlePage();
 }

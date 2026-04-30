@@ -16,10 +16,6 @@ def on_connect(client, userdata, flags, rc):
         print("Connected to MQTT")
         connected = True
 
-        # publish trạng thái online
-        client.publish("espD/status", "online", retain=True)
-        client.publish("espC/status", "online", retain=True)
-
     else:
         print("MQTT connect failed:", rc)
 
