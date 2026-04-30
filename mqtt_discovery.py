@@ -15,14 +15,10 @@ def on_connect(client, userdata, flags, rc):
     if rc == 0:
         print("Connected to MQTT")
         connected = True
-
     else:
         print("MQTT connect failed:", rc)
 
 client.on_connect = on_connect
-
-# ================== LWT ==================
-client.connect(BROKER, PORT, 60)
 
 # ================== HELPER ==================
 def publish_config(topic, payload):
@@ -44,16 +40,20 @@ device_espD = {
     "manufacturer": "Custom"
 }
 
-# ================== COMMON AVAILABILITY ==================
-def availability(device):
+# ================== HEARTBEAT CONFIG ==================
+def heartbeat(device):
     return {
-        "availability_topic": f"{device}/status",
-        "payload_available": "online",
-        "payload_not_available": "offline"
+        "state_topic": f"{device}/heartbeat",
+        "name": "Heartbeat",
+        "unique_id": f"{device}_heartbeat",
+        "device": device_espC if device == "espC" else device_espD,
+        "icon": "mdi:heart-pulse"
     }
 
 # ================== ESP C ==================
 def setup_espC():
+
+    # RELAY
     for i in range(1, 4):
         publish_config(
             f"homeassistant/switch/espC_relay{i}/config",
@@ -64,11 +64,11 @@ def setup_espC():
                 "payload_on": "ON",
                 "payload_off": "OFF",
                 "unique_id": f"espC_relay{i}",
-                "device": device_espC,
-                **availability("espC")
+                "device": device_espC
             }
         )
 
+    # TEMP
     publish_config(
         "homeassistant/sensor/espC_temp/config",
         {
@@ -76,11 +76,11 @@ def setup_espC():
             "state_topic": "espC/temp",
             "unit_of_measurement": "°C",
             "unique_id": "espC_temp",
-            "device": device_espC,
-            **availability("espC")
+            "device": device_espC
         }
     )
 
+    # HUM
     publish_config(
         "homeassistant/sensor/espC_hum/config",
         {
@@ -88,29 +88,40 @@ def setup_espC():
             "state_topic": "espC/hum",
             "unit_of_measurement": "%",
             "unique_id": "espC_hum",
-            "device": device_espC,
-            **availability("espC")
+            "device": device_espC
         }
     )
 
+    # LCD BACKLIGHT
     publish_config(
-    "homeassistant/switch/espC_lcd_backlight/config",
-    {
-        "name": "LCD Backlight",
-        "command_topic": "espC/lcd/backlight/set",
-        "state_topic": "espC/lcd/backlight/state",
-        "payload_on": "ON",
-        "payload_off": "OFF",
-        "unique_id": "espC_lcd_backlight",
-        "icon": "mdi:television",
-        "device": device_espC,
-        **availability("espC")
-    }
-)
+        "homeassistant/switch/espC_lcd_backlight/config",
+        {
+            "name": "LCD Backlight",
+            "command_topic": "espC/lcd/backlight/set",
+            "state_topic": "espC/lcd/backlight/state",
+            "payload_on": "ON",
+            "payload_off": "OFF",
+            "unique_id": "espC_lcd_backlight",
+            "icon": "mdi:television",
+            "device": device_espC
+        }
+    )
+
+    # HEARTBEAT (IMPORTANT)
+    publish_config(
+        "homeassistant/sensor/espC_heartbeat/config",
+        {
+            "name": "ESP C Heartbeat",
+            "state_topic": "espC/heartbeat",
+            "unique_id": "espC_heartbeat",
+            "device": device_espC,
+            "icon": "mdi:heart-pulse"
+        }
+    )
+
 
 # ================== ESP D ==================
 def setup_espD():
-    print("=== SETUP ESP D ===")
 
     for i in range(1, 3):
         publish_config(
@@ -122,8 +133,7 @@ def setup_espD():
                 "payload_on": "ON",
                 "payload_off": "OFF",
                 "unique_id": f"espD_relay{i}",
-                "device": device_espD,
-                **availability("espD")
+                "device": device_espD
             }
         )
 
@@ -137,8 +147,7 @@ def setup_espD():
                 "payload_on": "ON",
                 "payload_off": "OFF",
                 "unique_id": f"espD_servo{i}",
-                "device": device_espD,
-                **availability("espD")
+                "device": device_espD
             }
         )
 
@@ -151,8 +160,7 @@ def setup_espD():
             "payload_off": "0",
             "device_class": "motion",
             "unique_id": "espD_motion",
-            "device": device_espD,
-            **availability("espD")
+            "device": device_espD
         }
     )
 
@@ -165,12 +173,10 @@ def setup_espD():
             "payload_off": "OFF",
             "device_class": "light",
             "unique_id": "espD_light",
-            "device": device_espD,
-            **availability("espD")
+            "device": device_espD
         }
     )
 
-    # ===== TIME OF DAY =====
     publish_config(
         "homeassistant/sensor/espD_time_of_day/config",
         {
@@ -178,15 +184,26 @@ def setup_espD():
             "state_topic": "espD/time_of_day",
             "unique_id": "espD_time_of_day",
             "icon": "mdi:clock-outline",
-            "device": device_espD,
-            **availability("espD")
+            "device": device_espD
         }
     )
+
+    # HEARTBEAT
+    publish_config(
+        "homeassistant/sensor/espD_heartbeat/config",
+        {
+            "name": "ESP D Heartbeat",
+            "state_topic": "espD/heartbeat",
+            "unique_id": "espD_heartbeat",
+            "device": device_espD,
+            "icon": "mdi:heart-pulse"
+        }
+    )
+
 
 # ================== MAIN ==================
 client.loop_start()
 
-# chờ connect thật sự
 while not connected:
     time.sleep(0.1)
 
@@ -195,7 +212,6 @@ setup_espD()
 
 print("MQTT Discovery config sent!")
 
-# giữ connection + auto reconnect
 while True:
     if not client.is_connected():
         try:
