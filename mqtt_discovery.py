@@ -158,6 +158,30 @@ def setup_espD():
         )
 
     publish_config(
+        "homeassistant/sensor/espD_temp/config",
+        {
+            "name": "Temperature",
+            "state_topic": "espD/temp",
+            "unit_of_measurement": "°C",
+            "device_class": "temperature",
+            "unique_id": "espD_temp",
+            "device": device_espD
+        }
+    )
+    
+    publish_config(
+        "homeassistant/sensor/espD_hum/config",
+        {
+            "name": "Humidity",
+            "state_topic": "espD/hum",
+            "unit_of_measurement": "%",
+            "device_class": "humidity",
+            "unique_id": "espD_hum",
+            "device": device_espD
+        }
+    )
+
+    publish_config(
         "homeassistant/binary_sensor/espD_motion/config",
         {
             "name": "Motion",

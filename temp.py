@@ -1,123 +1,59 @@
-import paho.mqtt.client as mqtt
-import json
-import time
+import numpy as np
+import pandas as pd
 
-BROKER = "localhost"
-PORT = 1883
-
-client = mqtt.Client()
-
-# ================== CONNECT ==================
-def on_connect(client, userdata, flags, rc):
-    print("Connected to MQTT")
-
-client.on_connect = on_connect
-client.connect(BROKER, PORT, 60)
-
-# ================== HELPER ==================
-def publish_config(topic, payload):
-    client.publish(topic, json.dumps(payload), retain=True)
-
-# ================== ESP C ==================
-def setup_espC():
-    # Relay 1,2,3
-    for i in range(1, 4):
-        topic = f"homeassistant/switch/espC_relay{i}/config"
-        payload = {
-            "name": f"ESP C Relay {i}",
-            "command_topic": f"espC/relay{i}/set",
-            "state_topic": f"espC/relay{i}/state",
-            "payload_on": "ON",
-            "payload_off": "OFF",
-            "unique_id": f"espC_relay{i}"
-        }
-        publish_config(topic, payload)
-
-    # Temperature
-    publish_config(
-        "homeassistant/sensor/espC_temp/config",
-        {
-            "name": "ESP C Temperature",
-            "state_topic": "espC/temp",
-            "unit_of_measurement": "°C",
-            "unique_id": "espC_temp"
-        }
+# ===== Heat Index (NOAA approximation) =====
+def heat_index(t, rh):
+    return (
+        -8.784695 +
+        1.61139411 * t +
+        2.338549 * rh -
+        0.14611605 * t * rh -
+        0.012308094 * t * t -
+        0.016424828 * rh * rh +
+        0.002211732 * t * t * rh +
+        0.00072546 * t * rh * rh -
+        0.000003582 * t * t * rh * rh
     )
 
-    # Humidity
-    publish_config(
-        "homeassistant/sensor/espC_hum/config",
-        {
-            "name": "ESP C Humidity",
-            "state_topic": "espC/hum",
-            "unit_of_measurement": "%",
-            "unique_id": "espC_hum"
-        }
-    )
+# ===== Normalize về 0–10 =====
+def comfort_index(t, rh):
+    base = t
 
-# ================== ESP D ==================
-def setup_espD():
-    # Relay 1,2
-    for i in range(1, 3):
-        topic = f"homeassistant/switch/espD_relay{i}/config"
-        payload = {
-            "name": f"ESP D Relay {i}",
-            "command_topic": f"espD/relay{i}/set",
-            "state_topic": f"espD/relay{i}/state",
-            "payload_on": "ON",
-            "payload_off": "OFF",
-            "unique_id": f"espD_relay{i}"
-        }
-        publish_config(topic, payload)
+    # chỉ dùng HI khi đủ điều kiện
+    if t >= 27 and rh >= 40:
+        base = heat_index(t, rh)
 
-    # Servo 1,2 (treat as switch)
-    for i in range(1, 3):
-        topic = f"homeassistant/switch/espD_servo{i}/config"
-        payload = {
-            "name": f"ESP D Servo {i}",
-            "command_topic": f"espD/servo{i}/set",
-            "state_topic": f"espD/servo{i}/state",
-            "payload_on": "ON",
-            "payload_off": "OFF",
-            "unique_id": f"espD_servo{i}"
-        }
-        publish_config(topic, payload)
+    # mapping 10°C -> 0, 25°C -> 5, 40°C -> 10
+    if base <= 10:
+        ci = 0
+    elif base <= 25:
+        ci = 5 * (base - 10) / 15
+    elif base <= 40:
+        ci = 5 + 5 * (base - 25) / 15
+    else:
+        ci = 10
 
-    # Motion sensor
-    publish_config(
-        "homeassistant/binary_sensor/espD_motion/config",
-        {
-            "name": "ESP D Motion",
-            "state_topic": "espD/motion",
-            "payload_on": "1",
-            "payload_off": "0",
-            "device_class": "motion",
-            "unique_id": "espD_motion"
-        }
-    )
+    return round(max(0, min(10, ci)), 2)
 
-    # Light state (read-only)
-    publish_config(
-        "homeassistant/binary_sensor/espD_light/config",
-        {
-            "name": "ESP D Light",
-            "state_topic": "espD/light/state",
-            "payload_on": "ON",
-            "payload_off": "OFF",
-            "device_class": "light",
-            "unique_id": "espD_light"
-        }
-    )
 
-# ================== MAIN ==================
-client.loop_start()
+# ===== Range setup =====
+temps = np.arange(5, 45.1, 2.5)   # 5 → 45
+hums  = np.arange(5, 100.1, 5)    # 5 → 100
 
-time.sleep(1)
+# ===== Build table =====
+data = []
 
-setup_espC()
-setup_espD()
+for rh in hums:
+    row = []
+    for t in temps:
+        row.append(heat_index(t, rh))
+    data.append(row)
 
-print("MQTT Discovery config sent!")
+df = pd.DataFrame(data, columns=[f"{t:.1f}C" for t in temps])
+df.insert(0, "RH%", hums)
 
-while True:
-    time.sleep(10)
+# ===== Output =====
+print(df)
+
+# ===== Save CSV =====
+df.to_csv("heat_index.csv", index=False)

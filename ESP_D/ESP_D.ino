@@ -1,20 +1,8 @@
-/*
- * ESP_D — Fixed Version
- * Fixes:
- *  1. Servo: attach/write/detach đúng cách, detach ngay sau khi servo đã đến vị trí
- *     (dùng timer 300ms thay vì 250ms, và KHÔNG attach lại nếu đang active)
- *  2. reconnect() non-blocking với cooldown 5s
- *  3. MQTT buffer tăng lên 512 bytes
- *  4. setKeepAlive(60) để tránh broker ngắt kết nối
- *  5. WiFi watchdog trong loop()
- *  6. Serial logging đầy đủ để debug
- *  7. Guard state cho relay/servo tránh spam MQTT
- */
-
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
 #include <Servo.h>
 #include <time.h>
+#include <DHT.h>
 
 // ================== TIME (NTP) ==================
 const char* ntpServer          = "pool.ntp.org";
@@ -23,7 +11,7 @@ const int   daylightOffset_sec = 0;
 
 struct tm timeinfo;
 bool timeReady = false;
-String timeOfDay = "";
+char timeOfDay[32] = "";
 
 // ================== WIFI ==================
 const char* ssid     = "Test";
@@ -49,6 +37,16 @@ const unsigned long SERVO_DETACH_DELAY = 400;
 #define MOTION_PIN D7
 #define TOUCH_PIN  D0
 #define LIGHT_PIN  D4
+#define DHT_PIN    D3
+#define DHT_TYPE   DHT22
+
+DHT dht(DHT_PIN, DHT_TYPE);
+
+float temperature = 0;
+float humidity = 0;
+
+unsigned long lastDHTRead = 0;
+const unsigned long DHT_INTERVAL = 2000;
 
 // ================== OBJECTS ==================
 WiFiClient   espClient;
@@ -81,17 +79,24 @@ bool lastMotionState = LOW;
 // ================== RECONNECT ==================
 unsigned long lastReconnectAttempt = 0;
 const unsigned long RECONNECT_INTERVAL = 5000;
+unsigned long lastWifiReconnectAttempt = 0;
+const unsigned long WIFI_RECONNECT_INTERVAL = 5000;
+bool wifiReconnectRequested = false;
 
 // ============================================================
 //  LOG HELPER
 // ============================================================
-void log(const String& tag, const String& msg) {
-  Serial.print("[");
-  Serial.print(millis());
-  Serial.print("] [");
-  Serial.print(tag);
-  Serial.print("] ");
-  Serial.println(msg);
+void log(const char* tag, const char* msg) {
+  Serial.printf("[%lu] [%s] %s\n", millis(), tag, msg);
+}
+
+void logf(const char* tag, const char* fmt, ...) {
+  char buf[128];
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(buf, sizeof(buf), fmt, args);
+  va_end(args);
+  log(tag, buf);
 }
 
 // ============================================================
@@ -99,11 +104,16 @@ void log(const String& tag, const String& msg) {
 // ============================================================
 bool safePub(const char* topic, const char* payload, bool retained = false) {
   if (!client.connected()) {
-    log("MQTT", "Publish SKIPPED (disconnected): " + String(topic));
+    char buf[96];
+    snprintf(buf, sizeof(buf), "Publish SKIPPED (disconnected): %s", topic);
+    log("MQTT", buf);
     return false;
   }
+
   bool ok = client.publish(topic, payload, retained);
-  log("MQTT", "Publish " + String(topic) + " = " + String(payload) + (ok ? " OK" : " FAIL"));
+  char buf[128];
+  snprintf(buf, sizeof(buf), "Publish %s = %s %s", topic, payload, ok ? "OK" : "FAIL");
+  log("MQTT", buf);
   return ok;
 }
 
@@ -119,26 +129,31 @@ bool isNightTime() {
   return false;
 }
 
-String getTimeOfDay() {
-  if (!getLocalTime(&timeinfo)) return "Unknown";
-  int h = timeinfo.tm_hour, m = timeinfo.tm_min;
-  String hStr = (h < 10 ? "0" : "") + String(h);
-  String mStr = (m < 10 ? "0" : "") + String(m);
-  String greeting;
+void getTimeOfDay(char* outBuf, size_t bufLen) {
+  if (!getLocalTime(&timeinfo)) {
+    strncpy(outBuf, "Unknown", bufLen - 1);
+    outBuf[bufLen - 1] = '\0';
+    return;
+  }
+  int h = timeinfo.tm_hour;
+  int m = timeinfo.tm_min;
+  const char* greeting;
   if      (h >= 5  && h <= 10)                          greeting = "morning";
   else if (h >= 11 && h <= 13)                          greeting = "midday";
   else if (h >= 14 && (h < 17 || (h == 17 && m < 30))) greeting = "afternoon";
   else                                                  greeting = "evening";
-  return hStr + ":" + mStr + " Good " + greeting;
+  snprintf(outBuf, bufLen, "%02d:%02d Good %s", h, m, greeting);
 }
 
 void updateTimeOfDay() {
   if (!timeReady) return;
-  String newState = getTimeOfDay();
-  if (newState != timeOfDay) {
-    timeOfDay = newState;
-    safePub("espD/time_of_day", timeOfDay.c_str());
-    log("TIME", "Updated: " + timeOfDay);
+  char newState[32];
+  getTimeOfDay(newState, sizeof(newState));
+  if (strcmp(newState, timeOfDay) != 0) {
+    strncpy(timeOfDay, newState, sizeof(timeOfDay) - 1);
+    timeOfDay[sizeof(timeOfDay) - 1] = '\0';
+    safePub("espD/time_of_day", timeOfDay);
+    logf("TIME", "Updated: %s", timeOfDay);
   }
 }
 
@@ -146,18 +161,27 @@ void updateTimeOfDay() {
 //  WIFI
 // ============================================================
 void setup_wifi() {
-  log("WIFI", "Connecting to: " + String(ssid));
+  log("WIFI", "Starting WiFi");
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.setSleepMode(WIFI_NONE_SLEEP);
+  WiFi.persistent(false);
+  WiFi.disconnect(true);
   WiFi.begin(ssid, password);
+
   unsigned long start = millis();
   while (WiFi.status() != WL_CONNECTED) {
     delay(300);
     Serial.print(".");
     if (millis() - start > 15000) {
-      log("WIFI", "Timeout! Continuing without WiFi...");
+      log("WIFI", "Timeout! Continue without WiFi...");
       return;
     }
   }
-  log("WIFI", "Connected. IP: " + WiFi.localIP().toString());
+
+  char buf[64];
+  snprintf(buf, sizeof(buf), "Connected. IP: %s", WiFi.localIP().toString().c_str());
+  log("WIFI", buf);
 }
 
 // ============================================================
@@ -165,16 +189,17 @@ void setup_wifi() {
 // ============================================================
 void setRelay(int idx, bool state) {
   if (relayState[idx] == state) {
-    log("RELAY", "relay" + String(idx+1) + " already " + (state ? "ON" : "OFF") + ", skip");
+    logf("RELAY", "relay%d already %s, skip", idx + 1, state ? "ON" : "OFF");
     return;
   }
   relayState[idx] = state;
   int pin = (idx == 0) ? RELAY1_PIN : RELAY2_PIN;
   digitalWrite(pin, state ? HIGH : LOW);
-  log("RELAY", "relay" + String(idx+1) + " → " + (state ? "ON" : "OFF"));
+  logf("RELAY", "relay%d → %s", idx + 1, state ? "ON" : "OFF");
 
-  String topic = "espD/relay" + String(idx + 1) + "/state";
-  safePub(topic.c_str(), state ? "ON" : "OFF", true);
+  char topic[24];
+  snprintf(topic, sizeof(topic), "espD/relay%d/state", idx + 1);
+  safePub(topic, state ? "ON" : "OFF", true);
 }
 
 void toggleRelay(int idx)  { setRelay(idx, !relayState[idx]); }
@@ -196,20 +221,20 @@ void turnOffRelay(int idx) { setRelay(idx, false); }
 */
 void setServo(int idx, bool state) {
   if (servoState[idx] == state) {
-    log("SERVO", "servo" + String(idx+1) + " already " + (state ? "ON" : "OFF") + ", skip");
+    logf("SERVO", "servo%d already %s, skip", idx + 1, state ? "ON" : "OFF");
     return;
   }
 
   // FIX: Nếu servo đang trong quá trình di chuyển, chờ detach xong mới cho phép lệnh mới
   if (servoActive[idx]) {
-    log("SERVO", "servo" + String(idx+1) + " busy (moving), command queued/ignored");
+    logf("SERVO", "servo%d busy (moving), command queued/ignored", idx + 1);
     return;
   }
 
   servoState[idx]  = state;
   int angle        = state ? SERVO_ON_ANGLE : SERVO_OFF_ANGLE;
 
-  log("SERVO", "servo" + String(idx+1) + " → " + (state ? "ON" : "OFF") + " (angle=" + String(angle) + ")");
+  logf("SERVO", "servo%d → %s (angle=%d)", idx + 1, state ? "ON" : "OFF", angle);
 
   if (idx == 0) {
     servo1.attach(SERVO1_PIN);
@@ -222,8 +247,9 @@ void setServo(int idx, bool state) {
   servoActive[idx] = true;
   servoTimer[idx]  = millis();
 
-  String topic = "espD/servo" + String(idx + 1) + "/state";
-  safePub(topic.c_str(), state ? "ON" : "OFF", true);
+  char topic[24];
+  snprintf(topic, sizeof(topic), "espD/servo%d/state", idx + 1);
+  safePub(topic, state ? "ON" : "OFF", true);
 }
 
 void toggleServo(int idx) { setServo(idx, !servoState[idx]); }
@@ -237,9 +263,34 @@ void handleServoTimeout() {
       if (i == 0) servo1.detach();
       else        servo2.detach();
       servoActive[i] = false;
-      log("SERVO", "servo" + String(i+1) + " detached (movement complete)");
+      logf("SERVO", "servo%d detached (movement complete)", i + 1);
     }
   }
+}
+//////////////////////////////////////////
+void handleDHT() {
+  if (millis() - lastDHTRead < DHT_INTERVAL) return;
+  lastDHTRead = millis();
+
+  float h = dht.readHumidity();
+  float t = dht.readTemperature();
+
+  if (isnan(h) || isnan(t)) {
+    log("DHT", "Read failed");
+    return;
+  }
+
+  temperature = t;
+  humidity = h;
+
+  char tempStr[8];
+  char humStr[8];
+  snprintf(tempStr, sizeof(tempStr), "%.1f", t);
+  snprintf(humStr, sizeof(humStr), "%.1f", h);
+
+  safePub("espD/temp", tempStr, true);
+  safePub("espD/hum", humStr, true);
+  logf("DHT", "T=%s°C H=%s%%", tempStr, humStr);
 }
 
 // ============================================================
@@ -274,33 +325,35 @@ void shutdownAllDevices() {
 //  MQTT CALLBACK
 // ============================================================
 void callback(char* topic, byte* payload, unsigned int length) {
-  String msg;
-  for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
-  String t = String(topic);
-  log("MQTT", "Received: " + t + " = " + msg);
+  char msg[64];
+  unsigned int copyLen = length < sizeof(msg) - 1 ? length : sizeof(msg) - 1;
+  memcpy(msg, payload, copyLen);
+  msg[copyLen] = '\0';
 
-  if (t == "espD/relay1/set") {
-    if      (msg == "ON")     turnOnRelay(0);
-    else if (msg == "OFF")    turnOffRelay(0);
-    else if (msg == "TOGGLE") toggleRelay(0);
+  logf("MQTT", "Received: %s = %s", topic, msg);
+
+  if (strcmp(topic, "espD/relay1/set") == 0) {
+    if      (strcmp(msg, "ON") == 0)     turnOnRelay(0);
+    else if (strcmp(msg, "OFF") == 0)    turnOffRelay(0);
+    else if (strcmp(msg, "TOGGLE") == 0) toggleRelay(0);
   }
-  else if (t == "espD/relay2/set") {
-    if      (msg == "ON")     turnOnRelay(1);
-    else if (msg == "OFF")    turnOffRelay(1);
-    else if (msg == "TOGGLE") toggleRelay(1);
+  else if (strcmp(topic, "espD/relay2/set") == 0) {
+    if      (strcmp(msg, "ON") == 0)     turnOnRelay(1);
+    else if (strcmp(msg, "OFF") == 0)    turnOffRelay(1);
+    else if (strcmp(msg, "TOGGLE") == 0) toggleRelay(1);
   }
-  else if (t == "espD/servo1/set") {
-    if      (msg == "ON")     turnOnServo(0);
-    else if (msg == "OFF")    turnOffServo(0);
-    else if (msg == "TOGGLE") toggleServo(0);
+  else if (strcmp(topic, "espD/servo1/set") == 0) {
+    if      (strcmp(msg, "ON") == 0)     turnOnServo(0);
+    else if (strcmp(msg, "OFF") == 0)    turnOffServo(0);
+    else if (strcmp(msg, "TOGGLE") == 0) toggleServo(0);
   }
-  else if (t == "espD/servo2/set") {
-    if      (msg == "ON")     turnOnServo(1);
-    else if (msg == "OFF")    turnOffServo(1);
-    else if (msg == "TOGGLE") toggleServo(1);
+  else if (strcmp(topic, "espD/servo2/set") == 0) {
+    if      (strcmp(msg, "ON") == 0)     turnOnServo(1);
+    else if (strcmp(msg, "OFF") == 0)    turnOffServo(1);
+    else if (strcmp(msg, "TOGGLE") == 0) toggleServo(1);
   }
   else {
-    log("MQTT", "Unknown topic: " + t);
+    logf("MQTT", "Unknown topic: %s", topic);
   }
 }
 
@@ -314,7 +367,9 @@ void reconnect() {
   if (now - lastReconnectAttempt < RECONNECT_INTERVAL) return;
   lastReconnectAttempt = now;
 
-  log("MQTT", "Attempting reconnect to " + String(mqtt_server) + "...");
+  char buf[96];
+  snprintf(buf, sizeof(buf), "Attempting reconnect to %s...", mqtt_server);
+  log("MQTT", buf);
 
   if (client.connect("espD", nullptr, nullptr, "espD/status", 0, true, "offline")) {
     log("MQTT", "Connected!");
@@ -325,7 +380,8 @@ void reconnect() {
     client.subscribe("espD/servo2/set");
     log("MQTT", "Subscribed to all topics");
   } else {
-    log("MQTT", "Failed, rc=" + String(client.state()) + " — retry in " + String(RECONNECT_INTERVAL/1000) + "s");
+    snprintf(buf, sizeof(buf), "Failed, rc=%d — retry in %lu s", client.state(), RECONNECT_INTERVAL / 1000);
+    log("MQTT", buf);
   }
 }
 
@@ -339,7 +395,7 @@ void handleMotion() {
   if (motion != lastMotionState) {
     lastMotionState = motion;
     safePub("espD/motion", motion ? "1" : "0");
-    log("MOTION", motion ? "Detected" : "Cleared" + String(night ? " (night)" : " (day)"));
+    logf("MOTION", "%s%s", motion ? "Detected" : "Cleared", night ? " (night)" : " (day)");
 
     if (motion == HIGH && night) {
       log("MOTION", "Auto-ON light (night + motion)");
@@ -366,7 +422,7 @@ void handleTouch() {
 
     if (touchPhase == TOUCH_COUNTING && (now - lastTouchTime < 400)) {
       touchCount++;
-      log("TOUCH", "Multi-tap count: " + String(touchCount));
+      logf("TOUCH", "Multi-tap count: %d", touchCount);
     } else {
       touchCount = 1;
       touchPhase = TOUCH_COUNTING;
@@ -400,11 +456,11 @@ void handleTouch() {
       && currentState == LOW
       && (now - lastTouchTime > 400)) {
 
-    log("TOUCH", "Execute tap action, count=" + String(touchCount));
+    logf("TOUCH", "Execute tap action, count=%d", touchCount);
     if      (touchCount == 1) { toggleServo(0); log("TOUCH", "1 tap → toggleServo1 (den chinh)"); }
     else if (touchCount == 2) { toggleServo(1); log("TOUCH", "2 tap → toggleServo2 (den bep)"); }
     else if (touchCount == 3) { toggleRelay(0); log("TOUCH", "3 tap → toggleRelay1"); }
-    else { log("TOUCH", "No action for count=" + String(touchCount)); }
+    else { logf("TOUCH", "No action for count=%d", touchCount); }
 
     touchCount = 0;
     touchPhase = TOUCH_IDLE;
@@ -444,6 +500,7 @@ void setup() {
 
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
   unsigned long start = millis();
+  bool gotTime = false;
   while (!getLocalTime(&timeinfo)) {
     delay(500);
     Serial.print(".");
@@ -452,9 +509,24 @@ void setup() {
       break;
     }
   }
-  timeReady = true;
-  log("BOOT", "Time ready: " + getTimeOfDay());
-  log("BOOT", "Setup complete. Free heap: " + String(ESP.getFreeHeap()));
+  if (getLocalTime(&timeinfo)) {
+    gotTime = true;
+  }
+  timeReady = gotTime;
+
+  if (timeReady) {
+    char bootTime[32];
+    getTimeOfDay(bootTime, sizeof(bootTime));
+    logf("BOOT", "Time ready: %s", bootTime);
+  } else {
+    log("BOOT", "Time unavailable");
+  }
+  char heapBuf[64];
+  snprintf(heapBuf, sizeof(heapBuf), "Setup complete. Free heap: %u", ESP.getFreeHeap());
+  log("BOOT", heapBuf);
+
+  dht.begin();
+  log("DHT", "DHT22 initialized");
 }
 
 // ============================================================
@@ -485,16 +557,25 @@ void loop() {
   static unsigned long lastHeapLog = 0;
   if (millis() - lastHeapLog > 30000) {
     lastHeapLog = millis();
-    log("HEAP", "Free heap: " + String(ESP.getFreeHeap()) + " bytes | WiFi RSSI: " + String(WiFi.RSSI()) + " dBm | MQTT: " + (client.connected() ? "OK" : "DISCONNECTED"));
+    char heapBuf[128];
+    snprintf(heapBuf, sizeof(heapBuf), "Free heap: %u bytes | WiFi RSSI: %d dBm | MQTT: %s", ESP.getFreeHeap(), WiFi.RSSI(), client.connected() ? "OK" : "DISCONNECTED");
+    log("HEAP", heapBuf);
   }
 
   // WiFi watchdog
   if (WiFi.status() != WL_CONNECTED) {
-    log("WIFI", "Disconnected! Reconnecting...");
-    WiFi.reconnect();
-    delay(1000);
+    unsigned long now = millis();
+    bool firstRetry = !wifiReconnectRequested;
+    if (firstRetry || now - lastWifiReconnectAttempt >= WIFI_RECONNECT_INTERVAL) {
+      lastWifiReconnectAttempt = now;
+      wifiReconnectRequested = true;
+      log("WIFI", firstRetry ? "WiFi lost, starting reconnect..." : "WiFi reconnect retry...");
+      WiFi.disconnect();
+      WiFi.begin(ssid, password);
+    }
     return;
   }
+  wifiReconnectRequested = false;
 
   if (!client.connected()) reconnect();
   client.loop();
@@ -503,4 +584,5 @@ void loop() {
   handleTouch();
   handleServoTimeout();
   sub_loop_time();
+  handleDHT();
 }

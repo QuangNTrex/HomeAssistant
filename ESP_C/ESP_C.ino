@@ -4,6 +4,8 @@
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 #include <time.h>
+#include <math.h>
+
 
 // ================== WIFI ==================
 const char* ssid     = "Test";
@@ -133,7 +135,66 @@ void setup_time() {
   configTime(7 * 3600, 0, "pool.ntp.org", "time.nist.gov");
   log("TIME", "Syncing NTP...");
 }
+//////////////////////////////////////////
+float computeHeatIndex(float t, float h) {
+  return -8.784695 +
+         1.61139411 * t +
+         2.338549 * h -
+         0.14611605 * t * h -
+         0.012308094 * t * t -
+         0.016424828 * h * h +
+         0.002211732 * t * t * h +
+         0.00072546 * t * h * h -
+         0.000003582 * t * t * h * h;
+}
 
+float computeHeatIndex(float t, float h, float v) {
+  // vapor pressure (e)
+  float e = (h / 100.0) * 6.105 * exp((17.27 * t) / (237.7 + t));
+
+  // Apparent Temperature (Steadman)
+  float at = t + 0.33 * e - 0.70 * v - 4.0;
+
+  return at;
+}
+
+float comfortIndex(float t, float h) {
+
+  float cool    = 10.0;
+  float comfort = 25.0;
+  float hot     = 45.0;
+
+  // chỉ dùng Heat Index khi đủ điều kiện
+  float base = (t >= 15 && h >= 40) ? computeHeatIndex(t, h, 0) : t;
+
+  float ci;
+
+  // ❄️ Lạnh
+  if (base <= cool) {
+    ci = 0;
+  }
+
+  // 🌤️ Mát → dễ chịu
+  else if (base <= comfort) {
+    ci = 5.0 * (base - cool) / (comfort - cool);
+  }
+
+  // 🔥 Nóng
+  else if (base <= hot) {
+    ci = 5.0 + 5.0 * (base - comfort) / (hot - comfort);
+  }
+
+  // 🔴 Rất nóng
+  else {
+    ci = 10;
+  }
+
+  // clamp an toàn
+  if (ci < 0) ci = 0;
+  if (ci > 10) ci = 10;
+
+  return ci;
+}
 // ================= NIGHT =====================
 
 bool isNight() {
@@ -308,25 +369,36 @@ void pageClock() {
   char line1[17];
   char line2[17];
 
+  // ===== LINE 1: TIME =====
   if (getLocalTime(&timeinfo)) {
     const char* days[] = {"CN", "Th2", "Th3", "Th4", "Th5", "Th6", "Th7"};
+
     snprintf(line1, sizeof(line1),
-            "%s %02d:%02d %02d/%02d",
-            days[timeinfo.tm_wday],
-            timeinfo.tm_hour,
-            timeinfo.tm_min,
-            timeinfo.tm_mday,
-            timeinfo.tm_mon + 1);
+             "%s %02d:%02d %02d/%02d",
+             days[timeinfo.tm_wday],
+             timeinfo.tm_hour,
+             timeinfo.tm_min,
+             timeinfo.tm_mday,
+             timeinfo.tm_mon + 1);
   } else {
     snprintf(line1, sizeof(line1), "No Time");
   }
 
-  snprintf(line2, sizeof(line2),
-           "T:%2.1fC H:%2.1f%%",
-           lastTemp, lastHum);
+  // ===== LINE 2: TEMP + HUM + COMFORT INDEX =====
+  float ci = comfortIndex(lastTemp, lastHum);
 
-  lcd.setCursor(0,0); lcd.print(line1);
-  lcd.setCursor(0,1); lcd.print(line2);
+  snprintf(line2, sizeof(line2),
+           "%2.1f*C %2.0f%% %1.2f",
+           lastTemp,
+           lastHum,
+           ci);
+
+  // ===== DISPLAY =====
+  lcd.setCursor(0, 0);
+  lcd.print(line1);
+
+  lcd.setCursor(0, 1);
+  lcd.print(line2);
 }
 
 void pageSystem() {
