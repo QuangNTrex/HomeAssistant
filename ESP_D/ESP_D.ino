@@ -37,6 +37,7 @@ const unsigned long SERVO_DETACH_DELAY = 400;
 #define MOTION_PIN D7
 #define TOUCH_PIN  D0
 #define LIGHT_PIN  D4
+#define FAN_PIN    D8
 #define DHT_PIN    D3
 #define DHT_TYPE   DHT22
 
@@ -44,6 +45,7 @@ DHT dht(DHT_PIN, DHT_TYPE);
 
 float temperature = 0;
 float humidity = 0;
+const float DOWN_HUMI = 10.0; // Giảm 10% độ ẩm
 
 unsigned long lastDHTRead = 0;
 const unsigned long DHT_INTERVAL = 2000;
@@ -58,12 +60,15 @@ bool relayState[2] = {false, false};
 bool servoState[2] = {false, false};
 bool lightState    = false;
 bool lightAutoOn   = false;
+bool fanState      = false;
 
 unsigned long servoTimer[2]  = {0, 0};
 bool          servoActive[2] = {false, false};
 
-const int LIGHT_ON  = LOW;
-const int LIGHT_OFF = HIGH;
+const int LIGHT_ON      = LOW;
+const int LIGHT_OFF     = HIGH;
+const int FAN_ON_SPEED  = 1024;
+const int FAN_OFF_SPEED = 0;
 
 // ================== TOUCH STATE MACHINE ==================
 enum TouchPhase { TOUCH_IDLE, TOUCH_COUNTING, TOUCH_HOLDING };
@@ -281,7 +286,7 @@ void handleDHT() {
   }
 
   temperature = t;
-  humidity = h;
+  humidity = h - DOWN_HUMI;
 
   char tempStr[8];
   char humStr[8];
@@ -304,6 +309,24 @@ void setLight(bool state) {
   log("LIGHT", state ? "ON" : "OFF");
 }
 
+void setFan(bool state) {
+  if (fanState == state) {
+    logf("FAN", "fan already %s, skip", state ? "ON" : "OFF");
+    return;
+  }
+
+  fanState = state;
+  int speed = state ? FAN_ON_SPEED : FAN_OFF_SPEED;
+  analogWrite(FAN_PIN, speed);
+  safePub("espD/fan/state", state ? "ON" : "OFF", true);
+  safePub("espD/fan/speed", state ? "1024" : "0", true);
+  logf("FAN", "fan → %s (speed=%d)", state ? "ON" : "OFF", speed);
+}
+
+void toggleFan() { setFan(!fanState); }
+void turnOnFan()  { setFan(true); }
+void turnOffFan() { setFan(false); }
+
 // ============================================================
 //  SHUTDOWN ALL
 // ============================================================
@@ -314,10 +337,12 @@ void shutdownAllDevices() {
   turnOffServo(0);
   turnOffServo(1);
   setLight(false);
+  setFan(false);
 
   safePub("espC/relay1/set", "OFF");
   safePub("espC/relay2/set", "OFF");
   safePub("espC/relay3/set", "OFF");
+  safePub("espD/fan/set", "OFF");
   log("SYSTEM", "Shutdown complete");
 }
 
@@ -352,6 +377,11 @@ void callback(char* topic, byte* payload, unsigned int length) {
     else if (strcmp(msg, "OFF") == 0)    turnOffServo(1);
     else if (strcmp(msg, "TOGGLE") == 0) toggleServo(1);
   }
+  else if (strcmp(topic, "espD/fan/set") == 0) {
+    if      (strcmp(msg, "ON") == 0)     turnOnFan();
+    else if (strcmp(msg, "OFF") == 0)    turnOffFan();
+    else if (strcmp(msg, "TOGGLE") == 0) toggleFan();
+  }
   else {
     logf("MQTT", "Unknown topic: %s", topic);
   }
@@ -378,6 +408,7 @@ void reconnect() {
     client.subscribe("espD/relay2/set");
     client.subscribe("espD/servo1/set");
     client.subscribe("espD/servo2/set");
+    client.subscribe("espD/fan/set");
     log("MQTT", "Subscribed to all topics");
   } else {
     snprintf(buf, sizeof(buf), "Failed, rc=%d — retry in %lu s", client.state(), RECONNECT_INTERVAL / 1000);
@@ -480,12 +511,14 @@ void setup() {
   pinMode(RELAY1_PIN, OUTPUT);
   pinMode(RELAY2_PIN, OUTPUT);
   pinMode(LIGHT_PIN,  OUTPUT);
+  pinMode(FAN_PIN,    OUTPUT);
   pinMode(MOTION_PIN, INPUT);
   pinMode(TOUCH_PIN,  INPUT);
 
   digitalWrite(RELAY1_PIN, LOW);
   digitalWrite(RELAY2_PIN, LOW);
   digitalWrite(LIGHT_PIN,  LIGHT_OFF);
+  analogWrite(FAN_PIN,    FAN_OFF_SPEED);
   log("BOOT", "Pins initialized");
 
   setup_wifi();

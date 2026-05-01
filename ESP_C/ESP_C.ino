@@ -136,16 +136,48 @@ void setup_time() {
   log("TIME", "Syncing NTP...");
 }
 //////////////////////////////////////////
-float computeHeatIndex(float t, float h) {
-  return -8.784695 +
-         1.61139411 * t +
-         2.338549 * h -
-         0.14611605 * t * h -
-         0.012308094 * t * t -
-         0.016424828 * h * h +
-         0.002211732 * t * t * h +
-         0.00072546 * t * h * h -
-         0.000003582 * t * t * h * h;
+// float computeHeatIndex(float t, float h) {
+//   return -8.784695 +
+//          1.61139411 * t +
+//          2.338549 * h -
+//          0.14611605 * t * h -
+//          0.012308094 * t * t -
+//          0.016424828 * h * h +
+//          0.002211732 * t * t * h +
+//          0.00072546 * t * h * h -
+//          0.000003582 * t * t * h * h;
+// }
+float computeHeatIndex(float t_c, float humidity) {
+  // 1. Chuyển đổi sang độ F
+  float t = (t_c * 1.8) + 32.0;
+  float hi;
+
+  // 2. Tính toán Heat Index dựa trên ngưỡng 80 độ F (26.7 độ C)
+  if (t < 80.0) {
+    // Công thức đơn giản cho nhiệt độ thấp
+    hi = 0.5 * (t + 61.0 + ((t - 68.0) * 1.2) + (humidity * 0.094));
+  } 
+  else {
+    // Công thức hồi quy Rothfusz đầy đủ
+    hi = -42.379 + (2.04901523 * t) + (10.14333127 * humidity) 
+         - (0.22475541 * t * humidity) - (0.00683783 * t * t) 
+         - (0.05481717 * humidity * humidity) + (0.00122874 * t * t * humidity) 
+         + (0.00085282 * t * humidity * humidity) - (0.00000199 * t * t * humidity * humidity);
+
+    // Hiệu chỉnh 1: Nếu độ ẩm thấp (< 13%) và nhiệt độ từ 80-112 độ F
+    if ((humidity < 13.0) && (t >= 80.0) && (t <= 112.0)) {
+      float adj = ((13.0 - humidity) / 4.0) * sqrt((17.0 - abs(t - 95.0)) / 17.0);
+      hi -= adj;
+    } 
+    // Hiệu chỉnh 2: Nếu độ ẩm cao (> 85%) và nhiệt độ từ 80-87 độ F
+    else if ((humidity > 85.0) && (t >= 80.0) && (t <= 87.0)) {
+      float adj = ((humidity - 85.0) / 10.0) * ((87.0 - t) / 5.0);
+      hi += adj;
+    }
+  }
+
+  // 3. Chuyển đổi kết quả ngược lại độ C
+  return (hi - 32.0) / 1.8;
 }
 
 float computeHeatIndex(float t, float h, float v) {

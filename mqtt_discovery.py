@@ -158,6 +158,20 @@ def setup_espD():
         )
 
     publish_config(
+        "homeassistant/switch/espD_fan/config",
+        {
+            "name": "Fan",
+            "command_topic": "espD/fan/set",
+            "state_topic": "espD/fan/state",
+            "payload_on": "ON",
+            "payload_off": "OFF",
+            "unique_id": "espD_fan",
+            "icon": "mdi:fan",
+            "device": device_espD
+        }
+    )
+
+    publish_config(
         "homeassistant/sensor/espD_temp/config",
         {
             "name": "Temperature",
@@ -168,7 +182,7 @@ def setup_espD():
             "device": device_espD
         }
     )
-    
+
     publish_config(
         "homeassistant/sensor/espD_hum/config",
         {
@@ -215,17 +229,6 @@ def setup_espD():
             "unique_id": "espD_time_of_day",
             "icon": "mdi:clock-outline",
             "device": device_espD
-        }
-    )
-
-    publish_config(
-        "homeassistant/sensor/espD_heartbeat/config",
-        {
-            "name": "ESP D Heartbeat",
-            "state_topic": "espD/heartbeat",
-            "unique_id": "espD_heartbeat",
-            "device": device_espD,
-            "icon": "mdi:heart-pulse"
         }
     )
 

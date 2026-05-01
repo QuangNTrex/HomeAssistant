@@ -46,7 +46,7 @@ data = []
 for rh in hums:
     row = []
     for t in temps:
-        row.append(heat_index(t, rh))
+        row.append(round(heat_index(t, rh), 2))
     data.append(row)
 
 df = pd.DataFrame(data, columns=[f"{t:.1f}C" for t in temps])
