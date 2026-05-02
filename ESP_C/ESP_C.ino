@@ -28,6 +28,9 @@ const int   mqtt_port   = 1883;
 #define DHTPIN  D4   // GPIO2
 #define DHTTYPE DHT22
 
+#define TRIG_PIN D3  // GPIO0 - HC-SR04 Trigger
+#define ECHO_PIN D8  // GPIO15 - HC-SR04 Echo
+
 // ================== MQTT BUFFER ==================
 // FIX: Buffer mặc định 128 bytes không đủ — tăng lên 512
 #define MQTT_MAX_PACKET_SIZE 512
@@ -84,6 +87,11 @@ unsigned long lastDHTRead    = 0;
 const long    DHT_INTERVAL   = 5000;
 const long    DOWN_HUMI      = 10;
 
+// ================== HC-SR04 ULTRASONIC ==================
+unsigned long lastDistanceRead = 0;
+const long    DISTANCE_INTERVAL = 2000;  // 2 seconds
+float         lastDistance = -1;         // lưu giá trị cũ để so sánh
+
 // ================== RECONNECT ==================
 // FIX: Non-blocking reconnect với cooldown
 unsigned long lastReconnectAttempt = 0;
@@ -135,18 +143,8 @@ void setup_time() {
   configTime(7 * 3600, 0, "pool.ntp.org", "time.nist.gov");
   log("TIME", "Syncing NTP...");
 }
-//////////////////////////////////////////
-// float computeHeatIndex(float t, float h) {
-//   return -8.784695 +
-//          1.61139411 * t +
-//          2.338549 * h -
-//          0.14611605 * t * h -
-//          0.012308094 * t * t -
-//          0.016424828 * h * h +
-//          0.002211732 * t * t * h +
-//          0.00072546 * t * h * h -
-//          0.000003582 * t * t * h * h;
-// }
+
+/////////
 float computeHeatIndex(float t_c, float humidity) {
   // 1. Chuyển đổi sang độ F
   float t = (t_c * 1.8) + 32.0;
@@ -647,7 +645,7 @@ void handleDHT() {
     return;
   }
 
-  h = h - DOWN_HUMI;
+  // h = h - DOWN_HUMI;
 
   lastTemp = t;
   lastHum  = h;
@@ -655,6 +653,63 @@ void handleDHT() {
   log("DHT", "Temp=" + String(t, 1) + "°C  Hum=" + String(h, 1) + "%");
   safePub("espC/temp", String(t, 1).c_str());
   safePub("espC/hum",  String(h, 1).c_str());
+}
+
+// ================== HC-SR04 ULTRASONIC ==================
+float measureDistance() {
+  // Gửi xung trigger
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+
+  // Đợi nhận tín hiệu echo
+  unsigned long startTime = micros();
+  unsigned long timeout = startTime + 23000;  // Timeout ~4m (23ms)
+  
+  while (digitalRead(ECHO_PIN) == LOW && micros() < timeout) {
+    // Chờ ECHO PIN lên HIGH
+  }
+  unsigned long pulseStart = micros();
+
+  timeout = pulseStart + 23000;
+  while (digitalRead(ECHO_PIN) == HIGH && micros() < timeout) {
+    // Chờ ECHO PIN xuống LOW
+  }
+  unsigned long pulseEnd = micros();
+
+  // Tính khoảng cách: vận tốc âm thanh = 343 m/s = 0.0343 cm/µs
+  // Thời gian đi và về nên chia cho 2
+  unsigned long pulseDuration = pulseEnd - pulseStart;
+  float distance = (pulseDuration * 0.0343) / 2.0;
+
+  // Hạn chế khoảng cách hợp lý (cm): từ 2cm đến 400cm
+  if (distance < 2 || distance > 400) {
+    return -1;  // Giá trị không hợp lệ
+  }
+
+  return distance;
+}
+
+void handleUltrasonic() {
+  if (millis() - lastDistanceRead < DISTANCE_INTERVAL) return;
+  lastDistanceRead = millis();
+
+  float distance = measureDistance();
+
+  // Bỏ qua nếu đo không hợp lệ
+  if (distance < 0) {
+    log("ULTRASONIC", "Measurement out of range");
+    return;
+  }
+
+  // Chỉ publish nếu giá trị thay đổi (so sánh với sai số 0.5cm)
+  if (lastDistance < 0 || fabs(distance - lastDistance) > 0.5) {
+    lastDistance = distance;
+    log("ULTRASONIC", "Distance=" + String(distance, 1) + "cm");
+    safePub("espC/distance", String(distance, 1).c_str());
+  }
 }
 
 void handleWiFi() {
@@ -737,6 +792,10 @@ void setup() {
   dht.begin();
   log("BOOT", "DHT started");
 
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+  log("BOOT", "HC-SR04 pins configured");
+
   log("BOOT", "Setup complete. Free heap: " + String(ESP.getFreeHeap()));
 }
 
@@ -765,5 +824,6 @@ void loop() {
 
   handleTouch();
   handleDHT();
+  handleUltrasonic();
   handleLCD();
 }

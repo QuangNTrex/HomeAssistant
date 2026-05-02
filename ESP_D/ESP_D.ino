@@ -285,8 +285,9 @@ void handleDHT() {
     return;
   }
 
+  // h = h - DOWN_HUMI;
   temperature = t;
-  humidity = h - DOWN_HUMI;
+  humidity = h;
 
   char tempStr[8];
   char humStr[8];
