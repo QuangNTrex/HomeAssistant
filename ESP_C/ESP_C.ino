@@ -1,23 +1,21 @@
+#define MQTT_MAX_PACKET_SIZE 512
+
 #include <ESP8266WiFi.h>
-#include <PubSubClient.h>
-#include "DHT.h"
+#include "DHTManager.h"
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 #include <time.h>
 #include <math.h>
+#include "PageManager.h"
+#include "MqttManager.h"
+#include "TouchManager.h"
 
 
 // ================== WIFI ==================
 const char* ssid     = "Test";
 const char* password = "24082002";
 
-// ================== MQTT ==================
-const char* mqtt_server = "192.168.0.100";
-const int   mqtt_port   = 1883;
-
 // ================== PIN ==================
-#define TOUCH   D0   // GPIO16
-
 #define SDA_PIN D1   // LCD
 #define SCL_PIN D2   // LCD
 
@@ -25,25 +23,16 @@ const int   mqtt_port   = 1883;
 #define RELAY2  D6   // GPIO12
 #define RELAY3  D7   // GPIO13
 
-#define DHTPIN  D4   // GPIO2
-#define DHTTYPE DHT22
-
 #define TRIG_PIN D3  // GPIO0 - HC-SR04 Trigger
 #define ECHO_PIN D8  // GPIO15 - HC-SR04 Echo
 
-// ================== MQTT BUFFER ==================
-// FIX: Buffer mặc định 128 bytes không đủ — tăng lên 512
-#define MQTT_MAX_PACKET_SIZE 512
-
-
+#define TOUCH_PIN D0
 
 // ================== OBJECT ==================
 WiFiClient   espClient;
 PubSubClient client(espClient);
-DHT          dht(DHTPIN, DHTTYPE);
-
 LiquidCrystal_I2C lcd(0x27, 16, 2);
-
+PageManager pageManager(lcd, client);
 // ================== STATE ==================
 bool relayState[3] = {false, false, false};
 
@@ -51,7 +40,8 @@ bool relayState[3] = {false, false, false};
 bool lcdBacklight = true;
 
 unsigned long lastBacklightOn = 0;
-const unsigned long BACKLIGHT_TIMEOUT = 30000; // 30s
+const unsigned long BACKLIGHT_AUTO_OFF_TIMEOUT = 600000; // 10 minutes
+const float BACKLIGHT_DISTANCE_THRESHOLD = 100.0;       // cm
 
 unsigned long lastLCDUpdate = 0;
 const long LCD_INTERVAL = 5000;
@@ -60,32 +50,12 @@ float lastTemp = 0;
 float lastHum  = 0;
 
 // ================ PAGE ====================
-int lastPage = -1; // page đang hiển thị trước đó
-
-enum Page { PAGE_CLOCK = 0, PAGE_GREETING = 1, PAGE_SYSTEM = 2, PAGE_EVENT = 3 };
 int currentPage = PAGE_CLOCK;
 
 unsigned long lastPageUpdate = 0;
 const unsigned long PAGE_INTERVAL = 8000; // 8s clock ↔ greeting
 
 // Page event
-String eventLine1 = "";
-String eventLine2 = "";
-unsigned long eventShownAt   = 0;  // thời điểm event/system được kích hoạt
-const unsigned long RETURN_TO_CLOCK = 8000; // 5s rồi về clock
-
-// ================== TOUCH ==================
-enum TouchPhase { TOUCH_IDLE, TOUCH_COUNTING, TOUCH_HOLDING };
-TouchPhase    touchPhase     = TOUCH_IDLE;
-bool          lastTouchState = LOW;
-int           touchCount     = 0;
-unsigned long touchStartTime = 0;
-unsigned long lastTouchTime  = 0;
-
-// ================== DHT ==================
-unsigned long lastDHTRead    = 0;
-const long    DHT_INTERVAL   = 5000;
-const long    DOWN_HUMI      = 10;
 
 // ================== HC-SR04 ULTRASONIC ==================
 unsigned long lastDistanceRead = 0;
@@ -94,7 +64,7 @@ float         lastDistance = -1;         // lưu giá trị cũ để so sánh
 
 // ================== RECONNECT ==================
 // FIX: Non-blocking reconnect với cooldown
-unsigned long lastReconnectAttempt = 0;
+
 const unsigned long RECONNECT_INTERVAL = 5000;
 
 unsigned long lastWiFiAttempt = 0;
@@ -114,6 +84,9 @@ void log(const String& tag, const String& msg) {
   Serial.print(tag);
   Serial.print("] ");
   Serial.println(msg);
+
+  // Lưu log để hiển thị trên pageLog
+  pageManager.setLog(tag, msg);
 }
 
 // ================== WIFI ==================
@@ -144,87 +117,6 @@ void setup_time() {
   log("TIME", "Syncing NTP...");
 }
 
-/////////
-float computeHeatIndex(float t_c, float humidity) {
-  // 1. Chuyển đổi sang độ F
-  float t = (t_c * 1.8) + 32.0;
-  float hi;
-
-  // 2. Tính toán Heat Index dựa trên ngưỡng 80 độ F (26.7 độ C)
-  if (t < 80.0) {
-    // Công thức đơn giản cho nhiệt độ thấp
-    hi = 0.5 * (t + 61.0 + ((t - 68.0) * 1.2) + (humidity * 0.094));
-  } 
-  else {
-    // Công thức hồi quy Rothfusz đầy đủ
-    hi = -42.379 + (2.04901523 * t) + (10.14333127 * humidity) 
-         - (0.22475541 * t * humidity) - (0.00683783 * t * t) 
-         - (0.05481717 * humidity * humidity) + (0.00122874 * t * t * humidity) 
-         + (0.00085282 * t * humidity * humidity) - (0.00000199 * t * t * humidity * humidity);
-
-    // Hiệu chỉnh 1: Nếu độ ẩm thấp (< 13%) và nhiệt độ từ 80-112 độ F
-    if ((humidity < 13.0) && (t >= 80.0) && (t <= 112.0)) {
-      float adj = ((13.0 - humidity) / 4.0) * sqrt((17.0 - abs(t - 95.0)) / 17.0);
-      hi -= adj;
-    } 
-    // Hiệu chỉnh 2: Nếu độ ẩm cao (> 85%) và nhiệt độ từ 80-87 độ F
-    else if ((humidity > 85.0) && (t >= 80.0) && (t <= 87.0)) {
-      float adj = ((humidity - 85.0) / 10.0) * ((87.0 - t) / 5.0);
-      hi += adj;
-    }
-  }
-
-  // 3. Chuyển đổi kết quả ngược lại độ C
-  return (hi - 32.0) / 1.8;
-}
-
-float computeHeatIndex(float t, float h, float v) {
-  // vapor pressure (e)
-  float e = (h / 100.0) * 6.105 * exp((17.27 * t) / (237.7 + t));
-
-  // Apparent Temperature (Steadman)
-  float at = t + 0.33 * e - 0.70 * v - 4.0;
-
-  return at;
-}
-
-float comfortIndex(float t, float h) {
-
-  float cool    = 10.0;
-  float comfort = 25.0;
-  float hot     = 45.0;
-
-  // chỉ dùng Heat Index khi đủ điều kiện
-  float base = (t >= 15 && h >= 40) ? computeHeatIndex(t, h, 0) : t;
-
-  float ci;
-
-  // ❄️ Lạnh
-  if (base <= cool) {
-    ci = 0;
-  }
-
-  // 🌤️ Mát → dễ chịu
-  else if (base <= comfort) {
-    ci = 5.0 * (base - cool) / (comfort - cool);
-  }
-
-  // 🔥 Nóng
-  else if (base <= hot) {
-    ci = 5.0 + 5.0 * (base - comfort) / (hot - comfort);
-  }
-
-  // 🔴 Rất nóng
-  else {
-    ci = 10;
-  }
-
-  // clamp an toàn
-  if (ci < 0) ci = 0;
-  if (ci > 10) ci = 10;
-
-  return ci;
-}
 // ================= NIGHT =====================
 
 bool isNight() {
@@ -252,9 +144,6 @@ void setBacklight(bool state) {
 
   // 🔥 sync Home Assistant
   safePub("espC/lcd/backlight/state", state ? "ON" : "OFF", true);
-  // client.publish("espC/lcd/backlight/state",
-  //                state ? "ON" : "OFF",
-  //                true);
 
   log("LCD", String("Backlight → ") + (state ? "ON" : "OFF"));
 }
@@ -271,9 +160,6 @@ void toggleBacklight() {
 
   // 🔥 sync Home Assistant
   safePub("espC/lcd/backlight/state", lcdBacklight ? "ON" : "OFF", true);
-  // client.publish("espC/lcd/backlight/state",
-  //                lcdBacklight ? "ON" : "OFF",
-  //                true);
 
   log("LCD", String("Backlight → ") + (lcdBacklight ? "ON" : "OFF"));
 }
@@ -281,7 +167,7 @@ void toggleBacklight() {
 // ================== RELAY CONTROL ==================
 void publishRelayState(int relay) {
   String topic = "espC/relay" + String(relay + 1) + "/state";
-  bool ok = client.publish(topic.c_str(), relayState[relay] ? "ON" : "OFF", true);
+  bool ok = safePub(topic.c_str(), relayState[relay] ? "ON" : "OFF", true);
   log("RELAY", "Publish " + topic + " = " + (relayState[relay] ? "ON" : "OFF") + (ok ? " OK" : " FAIL"));
 }
 
@@ -301,37 +187,8 @@ void toggleRelay(int relay)  { setRelay(relay, !relayState[relay]); }
 void turnOnRelay(int relay)  { setRelay(relay, true);  }
 void turnOffRelay(int relay) { setRelay(relay, false); }
 
-///////////////////////////////
-
 void showEvent(const String& l1, const String& l2) {
-  eventLine1 = l1.substring(0, 16); // giới hạn 16 ký tự LCD
-  eventLine2 = l2.substring(0, 16);
-  currentPage  = PAGE_EVENT;
-  eventShownAt = millis();
-  lastLCDUpdate = 0; // force render ngay lập tức
-  lcd.clear();
-  log("EVENT", l1 + " | " + l2);
-}
-
-// ================== MQTT PUBLISH HELPER ==================
-bool safePub(const char* topic, const char* payload) {
-  if (!client.connected()) {
-    log("MQTT", "Publish skipped (disconnected): " + String(topic));
-    return false;
-  }
-  bool ok = client.publish(topic, payload);
-  log("MQTT", "Publish " + String(topic) + " = " + String(payload) + (ok ? " OK" : " FAIL (check buffer size)"));
-  return ok;
-}
-
-bool safePub(const char* topic, const char* payload, bool retain) {
-  if (!client.connected()) {
-    log("MQTT", "Publish skipped (disconnected): " + String(topic));
-    return false;
-  }
-  bool ok = client.publish(topic, payload, retain);
-  log("MQTT", "Publish " + String(topic) + " = " + String(payload) + (ok ? " OK" : " FAIL (check buffer size)"));
-  return ok;
+  pageManager.showEvent(l1, l2, currentPage, lastLCDUpdate);
 }
 
 // ================== MQTT CALLBACK ==================
@@ -363,296 +220,8 @@ void callback(char* topic, byte* payload, unsigned int length) {
   }
 }
 
-// ================== MQTT RECONNECT (NON-BLOCKING) ==================
-// FIX: Không dùng while-loop nữa — chỉ thử 1 lần mỗi RECONNECT_INTERVAL
-void reconnect() {
-  if (client.connected()) return;
-
-  unsigned long now = millis();
-  if (now - lastReconnectAttempt < RECONNECT_INTERVAL) return;
-  lastReconnectAttempt = now;
-
-  log("MQTT", "Attempting reconnect to " + String(mqtt_server) + "...");
-
-  if (client.connect("espC", nullptr, nullptr, "espC/status", 0, true, "offline")) {
-    log("MQTT", "Connected!");
-    client.publish("espC/status", "online", true);
-    client.subscribe("espC/relay1/set");
-    client.subscribe("espC/relay2/set");
-    client.subscribe("espC/relay3/set");
-    client.subscribe("espC/lcd/backlight/set");
-
-    client.publish("espC/lcd/backlight/state",
-               lcdBacklight ? "ON" : "OFF",
-               true);
-    log("MQTT", "Subscribed to relay topics");
-  } else {
-    log("MQTT", "Failed, rc=" + String(client.state()) + " — retry in " + String(RECONNECT_INTERVAL/1000) + "s");
-    // client.state() codes:
-    // -4: timeout, -3: connection lost, -2: connect failed, -1: disconnected
-    // 1: bad protocol, 2: bad client ID, 3: server unavailable, 4: bad credentials, 5: unauthorized
-  }
-}
-
-void pageClock() {
-  struct tm timeinfo;
-  char line1[17];
-  char line2[17];
-
-  // ===== LINE 1: TIME =====
-  if (getLocalTime(&timeinfo)) {
-    const char* days[] = {"CN", "Th2", "Th3", "Th4", "Th5", "Th6", "Th7"};
-
-    snprintf(line1, sizeof(line1),
-             "%s %02d:%02d %02d/%02d",
-             days[timeinfo.tm_wday],
-             timeinfo.tm_hour,
-             timeinfo.tm_min,
-             timeinfo.tm_mday,
-             timeinfo.tm_mon + 1);
-  } else {
-    snprintf(line1, sizeof(line1), "No Time");
-  }
-
-  // ===== LINE 2: TEMP + HUM + COMFORT INDEX =====
-  float ci = comfortIndex(lastTemp, lastHum);
-
-  snprintf(line2, sizeof(line2),
-           "%2.1f*C %2.0f%% %1.2f",
-           lastTemp,
-           lastHum,
-           ci);
-
-  // ===== DISPLAY =====
-  lcd.setCursor(0, 0);
-  lcd.print(line1);
-
-  lcd.setCursor(0, 1);
-  lcd.print(line2);
-}
-
-void pageSystem() {
-  char line1[17];
-  char line2[17];
-
-  snprintf(line1, sizeof(line1),
-           "WiFi:%ddBm", WiFi.RSSI());
-
-  snprintf(line2, sizeof(line2),
-           "MQTT:%s",
-           client.connected() ? "OK" : "FAIL");
-
-  lcd.setCursor(0,0); lcd.print(line1);
-  lcd.setCursor(0,1); lcd.print(line2);
-}
-
-// ================== PAGE EVENT ==================
-void pageEvent() {
-  lcd.setCursor(0, 0); lcd.print(eventLine1);
-  lcd.setCursor(0, 1); lcd.print(eventLine2);
-}
-
-void pageGreeting() {
-  static int  enteredFromPage = -1;
-  static char savedGreet[17]  = "";
-  static char savedGreet2[17] = "";
-
-  // Tính lại nếu vừa chuyển từ page khác sang Greeting
-  if (lastPage != PAGE_GREETING) {
-    struct tm timeinfo;
-    if (getLocalTime(&timeinfo)) {
-      int h = timeinfo.tm_hour;
-
-      const char* greet;
-      if      (h >= 5  && h < 7)  greet = "Early morning";
-      else if (h >= 7  && h < 10) greet = "Active morning";
-      else if (h >= 10 && h < 12) greet = "Almost noon";
-      else if (h < 18)            greet = "Peaceful aftnoon";
-      else                        greet = "Calm night";
-
-      if (timeinfo.tm_wday == 0)
-        greet = (h < 12) ? "Slow Sun morning" : "Relaxing Sunday";
-
-      const char* msgs[] = {
-        "don forget drink",
-        "time to relaxing",
-        "today is begin",
-        "welcome Quang!"
-      };
-
-      strncpy(savedGreet,  greet,             16); savedGreet[16]  = '\0';
-      strncpy(savedGreet2, msgs[random(0, 4)], 16); savedGreet2[16] = '\0';
-    } else {
-      strncpy(savedGreet,  "Xin chao :3",  16); savedGreet[16]  = '\0';
-      strncpy(savedGreet2, "Tien Quang <3", 16); savedGreet2[16] = '\0';
-    }
-  }
-
-  lcd.setCursor(0, 0); lcd.print(savedGreet);
-  lcd.setCursor(0, 1); lcd.print(savedGreet2);
-}
-
 void handleLCD() {
-  unsigned long now = millis();
-  // static int lastPage = -1;
-
-  // --- Logic tự động chuyển page ---
-
-  // EVENT & SYSTEM: sau 5s về CLOCK
-  if ((currentPage == PAGE_EVENT || currentPage == PAGE_SYSTEM)
-      && eventShownAt != 0
-      && (now - eventShownAt >= RETURN_TO_CLOCK)) {
-    currentPage   = PAGE_CLOCK;
-    lastPageUpdate = now;
-    eventShownAt  = 0;
-    lcd.clear();
-    lastPage = -1;
-  }
-
-  // CLOCK → GREETING sau 5s
-  if (currentPage == PAGE_CLOCK
-      && (now - lastPageUpdate >= PAGE_INTERVAL)) {
-    currentPage    = PAGE_GREETING;
-    lastPageUpdate = now;
-    lcd.clear();
-    lastPage = -1;
-  }
-  // GREETING → CLOCK sau 5s
-  else if (currentPage == PAGE_GREETING
-           && (now - lastPageUpdate >= PAGE_INTERVAL)) {
-    currentPage    = PAGE_CLOCK;
-    lastPageUpdate = now;
-    lcd.clear();
-    lastPage = -1;
-  }
-
-  // --- Throttle render ---
-  if (now - lastLCDUpdate < 500) return; // render mỗi 0.5s (clock cần cập nhật phút)
-  lastLCDUpdate = now;
-
-  // Clear khi đổi page
-  if (currentPage != lastPage) {
-    lcd.clear();
-  }
-
-  switch (currentPage) {
-    case PAGE_CLOCK:    pageClock();    break;
-    case PAGE_GREETING: pageGreeting(); break;
-    case PAGE_SYSTEM:   pageSystem();   break;
-    case PAGE_EVENT:    pageEvent();    break;
-  }
-
-  lastPage = currentPage;
-}
-
-void handleHold() {
-  toggleBacklight();
-  log("TOUCH", "HOLD detected → TOGGLE backlight");
-}
-
-void singleTouch() {
-
-}
-
-void doubleTouch() {
-
-}
-
-void tripleTouch() {
-
-}
-
-void handleTouch() {
-  bool currentState = digitalRead(TOUCH);
-  unsigned long now = millis();
-
-  // Phát hiện chạm (cạnh lên: LOW → HIGH)
-  if (lastTouchState == LOW && currentState == HIGH) {
-    touchStartTime = now;
-
-    if (touchPhase == TOUCH_COUNTING && (now - lastTouchTime < 500)) {
-      touchCount++;
-      log("TOUCH", "Multi-tap count: " + String(touchCount));
-    } else {
-      touchCount = 1;
-      touchPhase = TOUCH_COUNTING;
-      log("TOUCH", "New tap, count: 1");
-    }
-    lastTouchTime = now;
-  }
-
-  // Kiểm tra HOLD (giữ > 2s, single tap)
-  if (currentState == HIGH
-      && touchPhase == TOUCH_COUNTING
-      && touchCount == 1
-      && (now - touchStartTime > 2000)) {
-
-    handleHold();
-    touchPhase = TOUCH_HOLDING;
-    touchCount = 0;
-  }
-
-  // Phát hiện thả tay (cạnh xuống: HIGH → LOW)
-  if (lastTouchState == HIGH && currentState == LOW) {
-    if (touchPhase == TOUCH_HOLDING) {
-      log("TOUCH", "Released from HOLD → IDLE");
-      touchPhase = TOUCH_IDLE;
-    }
-  }
-
-  // Timeout multi-tap: 500ms sau lần chạm cuối → thực thi action
-  if (touchPhase == TOUCH_COUNTING
-      && currentState == LOW
-      && (now - lastTouchTime > 500)) {
-
-    log("TOUCH", "Execute tap action, count=" + String(touchCount));
-
-    // if      (touchCount == 1) { toggleRelay(0); log("TOUCH", "1 tap → toggle relay1 (local)"); setBacklight(true); }
-    if (touchCount == 1) {
-      // Cycle qua 3 pages: CLOCK(0) → GREETING(1) → SYSTEM(2) → CLOCK(0)
-      // Từ EVENT hoặc bất kỳ page nào cũng bước tiếp theo chu kỳ
-      int next = (currentPage == PAGE_EVENT)
-                ? PAGE_CLOCK
-                : (currentPage + 1) % 3; // chỉ cycle trong 0,1,2
-      currentPage    = next;
-      lastPageUpdate = millis();
-      eventShownAt   = (next == PAGE_SYSTEM) ? millis() : 0; // SYSTEM dùng timer về clock
-      lcd.clear();
-      setBacklight(true);
-      log("TOUCH", "1 tap → page " + String(currentPage));
-    }
-    else if (touchCount == 2) { toggleRelay(0); log("TOUCH", "2 tap → toggle relay1 (local)"); showEvent("Tap Relay 1", relayState[0] ? "Turned ON" : "Turned OFF");} // bật đèn
-    else if (touchCount == 3) { toggleRelay(1); log("TOUCH", "3 tap → toggle relay2 (man hinh)");  showEvent("Tap Relay 2", relayState[1] ? "Turned ON" : "Turned OFF"); } // bật màn hình
-    else { log("TOUCH", "No action for count=" + String(touchCount)); }
-
-    touchCount = 0;
-    touchPhase = TOUCH_IDLE;
-  }
-
-  lastTouchState = currentState;
-}
-
-// ================== DHT NON-BLOCKING ==================
-void handleDHT() {
-  if (millis() - lastDHTRead < DHT_INTERVAL) return;
-  lastDHTRead = millis();
-
-  float t = dht.readTemperature();
-  float h = dht.readHumidity();
-
-  if (isnan(t) || isnan(h)) {
-    log("DHT", "Read FAILED — check wiring/sensor");
-    return;
-  }
-
-  // h = h - DOWN_HUMI;
-
-  lastTemp = t;
-  lastHum  = h;
-
-  log("DHT", "Temp=" + String(t, 1) + "°C  Hum=" + String(h, 1) + "%");
-  safePub("espC/temp", String(t, 1).c_str());
-  safePub("espC/hum",  String(h, 1).c_str());
+  pageManager.handleLCD(currentPage, lastLCDUpdate, LCD_INTERVAL, lastTemp, lastHum);
 }
 
 // ================== HC-SR04 ULTRASONIC ==================
@@ -702,6 +271,12 @@ void handleUltrasonic() {
   if (distance < 0) {
     log("ULTRASONIC", "Measurement out of range");
     return;
+  }
+
+  // Nếu màn hình tắt và có khoảng cách < ngưỡng, bật lại đèn nền
+  if (!lcdBacklight && distance < BACKLIGHT_DISTANCE_THRESHOLD) {
+    setBacklight(true);
+    log("LCD", "Ultrasonic detected presence → backlight ON");
   }
 
   // Chỉ publish nếu giá trị thay đổi (so sánh với sai số 0.5cm)
@@ -754,6 +329,17 @@ void handleWiFi() {
   WiFi.begin(ssid, password);
 }
 
+void handleBacklightAutoOff() {
+  if (lcdBacklight && millis() - lastBacklightOn >= BACKLIGHT_AUTO_OFF_TIMEOUT) {
+    if (lastDistance > BACKLIGHT_DISTANCE_THRESHOLD) {
+      setBacklight(false);
+      log("LCD", "Backlight auto-off after timeout");
+    }
+    else {
+      lastBacklightOn = millis(); // reset timer nếu vẫn có người
+    }
+  }
+}
 // ================== SETUP ==================
 void setup() {
   Serial.begin(115200);
@@ -763,7 +349,7 @@ void setup() {
   pinMode(RELAY1, OUTPUT);
   pinMode(RELAY2, OUTPUT);
   pinMode(RELAY3, OUTPUT);
-  pinMode(TOUCH,  INPUT_PULLUP);
+  touchBegin();
 
   digitalWrite(RELAY1, LOW);
   digitalWrite(RELAY2, LOW);
@@ -781,15 +367,10 @@ void setup() {
   delay(5000);
   setup_time();
 
-  // FIX: Tăng buffer MQTT lên 512 bytes
-  client.setBufferSize(512);
-  // FIX: KeepAlive 60s để broker không ngắt kết nối khi ESP đang xử lý
-  client.setKeepAlive(60);
-  client.setServer(mqtt_server, mqtt_port);
-  client.setCallback(callback);
+  mqttBegin(callback);
   log("BOOT", "MQTT configured");
 
-  dht.begin();
+  dhtBegin();
   log("BOOT", "DHT started");
 
   pinMode(TRIG_PIN, OUTPUT);
@@ -806,24 +387,31 @@ void loop() {
     lastHeapLog = millis();
     log("HEAP", "Free heap: " + String(ESP.getFreeHeap()) +
         " | WiFi RSSI: " + String(WiFi.RSSI()) +
-        " dBm | MQTT: " + (client.connected() ? "OK" : "DISCONNECTED"));
+        " dBm | MQTT: " + (mqttIsConnected() ? "OK" : "DISCONNECTED"));
   }
 
   handleWiFi();
 
   if (WiFi.status() == WL_CONNECTED) {
-    if (!client.connected()) reconnect();
-    client.loop();
+    if (!mqttIsConnected()) mqttReconnect();
+    mqttLoop();
     // giữ mqtt luôn sống
-    if (client.connected() && millis() - lastStatusPub > STATUS_INTERVAL) {
+    if (mqttIsConnected() && millis() - lastStatusPub > STATUS_INTERVAL) {
       lastStatusPub = millis();
-      client.publish("espC/status", "online", true);
+      safePub("espC/status", "online", true);
       log("MQTT", "Heartbeat published");
     }
   }
 
-  handleTouch();
-  handleDHT();
+  handleTouch(currentPage, lastPageUpdate);
+  handleDHT(lastTemp, lastHum);
   handleUltrasonic();
+
+  if (lcdBacklight && millis() - lastBacklightOn >= BACKLIGHT_AUTO_OFF_TIMEOUT
+      && lastDistance > BACKLIGHT_DISTANCE_THRESHOLD) {
+    setBacklight(false);
+    log("LCD", "Backlight auto-off after timeout");
+  }
+
   handleLCD();
 }

@@ -102,6 +102,27 @@ def setup_espC():
     )
 
     publish_config(
+        "homeassistant/sensor/espC_heat_index/config",
+        {
+            "name": "Heat Index",
+            "state_topic": "espC/heat_index",
+            "unit_of_measurement": "°C",
+            "unique_id": "espC_heat_index",
+            "device": device_espC
+        }
+    )
+
+    publish_config(
+        "homeassistant/sensor/espC_comfort_index/config",
+        {
+            "name": "Comfort Index",
+            "state_topic": "espC/comfort_index",
+            "unique_id": "espC_comfort_index",
+            "device": device_espC
+        }
+    )
+
+    publish_config(
         "homeassistant/switch/espC_lcd_backlight/config",
         {
             "name": "LCD Backlight",
@@ -191,6 +212,27 @@ def setup_espD():
             "unit_of_measurement": "%",
             "device_class": "humidity",
             "unique_id": "espD_hum",
+            "device": device_espD
+        }
+    )
+
+    publish_config(
+        "homeassistant/sensor/espD_heat_index/config",
+        {
+            "name": "Heat Index",
+            "state_topic": "espD/heat_index",
+            "unit_of_measurement": "°C",
+            "unique_id": "espD_heat_index",
+            "device": device_espD
+        }
+    )
+
+    publish_config(
+        "homeassistant/sensor/espD_comfort_index/config",
+        {
+            "name": "Comfort Index",
+            "state_topic": "espD/comfort_index",
+            "unique_id": "espD_comfort_index",
             "device": device_espD
         }
     )
