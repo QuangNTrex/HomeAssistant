@@ -61,7 +61,8 @@ const unsigned long PAGE_INTERVAL = 8000; // 8s clock ↔ greeting
 unsigned long lastDistanceRead = 0;
 const long    DISTANCE_INTERVAL = 2000;  // 2 seconds
 float         lastDistance = -1;         // lưu giá trị cũ để so sánh
-
+unsigned long lastCloseDetectionTime = 0;  // khi đầu tiên phát hiện khoảng cách < 100cm
+const unsigned long CLOSE_DETECTION_TIMEOUT = 2000;  // phải detect liên tục trong 2s mới bật
 // ================== RECONNECT ==================
 // FIX: Non-blocking reconnect với cooldown
 
@@ -270,13 +271,30 @@ void handleUltrasonic() {
   // Bỏ qua nếu đo không hợp lệ
   if (distance < 0) {
     log("ULTRASONIC", "Measurement out of range");
+    lastCloseDetectionTime = 0;  // reset timer khi đo không hợp lệ
     return;
   }
 
-  // Nếu màn hình tắt và có khoảng cách < ngưỡng, bật lại đèn nền
-  if (!lcdBacklight && distance < BACKLIGHT_DISTANCE_THRESHOLD) {
-    setBacklight(true);
-    log("LCD", "Ultrasonic detected presence → backlight ON");
+  // Debounce: phát hiện khoảng cách < ngưỡng phải liên tục trong 2 giây
+  if (distance < BACKLIGHT_DISTANCE_THRESHOLD) {
+    // Nếu này là lần đầu detect gần, ghi nhận thời gian
+    if (lastCloseDetectionTime == 0) {
+      lastCloseDetectionTime = millis();
+      log("ULTRASONIC", "Close detection started (" + String(distance, 1) + "cm) - waiting 2s...");
+    } else {
+      // Kiểm tra xem đã detect liên tục được 2 giây chưa
+      unsigned long detectionDuration = millis() - lastCloseDetectionTime;
+      if (detectionDuration >= CLOSE_DETECTION_TIMEOUT && !lcdBacklight) {
+        setBacklight(true);
+        log("LCD", "Ultrasonic detected presence (" + String(detectionDuration) + "ms) → backlight ON");
+      }
+    }
+  } else {
+    // Nếu khoảng cách > ngưỡng, reset timer
+    if (lastCloseDetectionTime > 0) {
+      log("ULTRASONIC", "Close detection cancelled (distance=" + String(distance, 1) + "cm)");
+      lastCloseDetectionTime = 0;
+    }
   }
 
   // Chỉ publish nếu giá trị thay đổi (so sánh với sai số 0.5cm)
@@ -407,11 +425,7 @@ void loop() {
   handleDHT(lastTemp, lastHum);
   handleUltrasonic();
 
-  if (lcdBacklight && millis() - lastBacklightOn >= BACKLIGHT_AUTO_OFF_TIMEOUT
-      && lastDistance > BACKLIGHT_DISTANCE_THRESHOLD) {
-    setBacklight(false);
-    log("LCD", "Backlight auto-off after timeout");
-  }
+  handleBacklightAutoOff();
 
   handleLCD();
 }

@@ -21,6 +21,9 @@ def on_connect(client, userdata, flags, rc, properties=None):
     if rc == 0:
         print("[MQTT] Connected")
         connected = True
+        setup_espC()
+        setup_espD()
+        print("[SYSTEM] MQTT Discovery Ready")
     else:
         print("[MQTT] Connect failed:", rc)
 

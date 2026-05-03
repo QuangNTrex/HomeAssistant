@@ -49,15 +49,15 @@ float computeHeatIndex(float t_c, float humidity) {
   return (hi - 32.0) / 1.8;
 }
 
-float computeHeatIndex(float t, float h, float v) {
-  // vapor pressure (e)
-  float e = (h / 100.0) * 6.105 * exp((17.27 * t) / (237.7 + t));
+// float computeHeatIndex(float t, float h, float v) {
+//   // vapor pressure (e)
+//   float e = (h / 100.0) * 6.105 * exp((17.27 * t) / (237.7 + t));
 
-  // Apparent Temperature (Steadman)
-  float at = t + 0.33 * e - 0.70 * v - 4.0;
+//   // Apparent Temperature (Steadman)
+//   float at = t + 0.33 * e - 0.70 * v - 4.0;
 
-  return at;
-}
+//   return at;
+// }
 
 float comfortIndex(float t, float h) {
   float cool    = 10.0;
@@ -65,13 +65,13 @@ float comfortIndex(float t, float h) {
   float hot     = 45.0;
 
   // chỉ dùng Heat Index khi đủ điều kiện
-  float base = (t >= 15 && h >= 40) ? computeHeatIndex(t, h, 0) : t;
+  float base = (t >= 15 && h >= 40) ? computeHeatIndex(t, h) : t;
 
   float ci;
 
   // ❄️ Lạnh
   if (base <= cool) {
-    ci = 0;
+    ci = 5.0 * (base - cool) / (comfort - cool);
   }
 
   // 🌤️ Mát → dễ chịu
@@ -86,12 +86,8 @@ float comfortIndex(float t, float h) {
 
   // 🔴 Rất nóng
   else {
-    ci = 10;
+    ci = 5.0 + 5.0 * (base - comfort) / (hot - comfort);
   }
-
-  // clamp an toàn
-  if (ci < 0) ci = 0;
-  if (ci > 10) ci = 10;
 
   return ci;
 }
@@ -126,6 +122,6 @@ void handleDHT(float& lastTemp, float& lastHum) {
   float ci = comfortIndex(t, h);
 
   safePub("espC/heat_index", String(hi, 1).c_str());
-  safePub("espC/comfort_index", String(ci, 1).c_str());
+  safePub("espC/comfort_index", String(ci, 2).c_str());
 
 }
