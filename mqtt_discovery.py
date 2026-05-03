@@ -120,6 +120,7 @@ def setup_espC():
         {
             "name": "Comfort Index",
             "state_topic": "espC/comfort_index",
+            "state_class": "measurement",
             "unique_id": "espC_comfort_index",
             "device": device_espC
         }
@@ -225,6 +226,7 @@ def setup_espD():
             "name": "Heat Index",
             "state_topic": "espD/heat_index",
             "unit_of_measurement": "°C",
+            "state_class": "measurement",
             "unique_id": "espD_heat_index",
             "device": device_espD
         }
@@ -235,6 +237,7 @@ def setup_espD():
         {
             "name": "Comfort Index",
             "state_topic": "espD/comfort_index",
+            "state_class": "measurement",
             "unique_id": "espD_comfort_index",
             "device": device_espD
         }
