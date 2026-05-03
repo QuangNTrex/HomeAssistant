@@ -293,14 +293,15 @@ def heartbeat_loop():
         time.sleep(HEARTBEAT_INTERVAL)
 
 # ================== START ==================
+print("[SYSTEM] Starting MQTT Discovery...")
+time.sleep(10)  # Chờ 10s để broker khởi động xong
+
 client.connect(BROKER, PORT, 60)
 client.loop_start()
 
+print("[SYSTEM] Waiting for MQTT connection...")
 while not connected:
     time.sleep(0.1)
-
-setup_espC()
-setup_espD()
 
 print("[SYSTEM] MQTT Discovery Ready")
 
@@ -310,8 +311,10 @@ threading.Thread(target=heartbeat_loop, daemon=True).start()
 while True:
     if not client.is_connected():
         try:
+            print("[MQTT] Attempting to reconnect...")
             client.reconnect()
         except Exception as e:
             print("[MQTT] reconnect failed:", e)
+            time.sleep(5)  # Đợi 5s trước khi retry
 
     time.sleep(5)
