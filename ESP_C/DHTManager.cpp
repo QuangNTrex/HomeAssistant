@@ -49,16 +49,6 @@ float computeHeatIndex(float t_c, float humidity) {
   return (hi - 32.0) / 1.8;
 }
 
-// float computeHeatIndex(float t, float h, float v) {
-//   // vapor pressure (e)
-//   float e = (h / 100.0) * 6.105 * exp((17.27 * t) / (237.7 + t));
-
-//   // Apparent Temperature (Steadman)
-//   float at = t + 0.33 * e - 0.70 * v - 4.0;
-
-//   return at;
-// }
-
 float comfortIndex(float t, float h) {
   float cool    = 10.0;
   float comfort = 25.0;

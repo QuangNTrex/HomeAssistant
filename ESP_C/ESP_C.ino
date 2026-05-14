@@ -27,6 +27,7 @@ const char* password = "24082002";
 #define ECHO_PIN D8  // GPIO15 - HC-SR04 Echo
 
 #define TOUCH_PIN D0
+#define TOUCH_PIN_2 A0
 
 // ================== OBJECT ==================
 WiFiClient   espClient;
@@ -42,6 +43,8 @@ bool lcdBacklight = true;
 unsigned long lastBacklightOn = 0;
 const unsigned long BACKLIGHT_AUTO_OFF_TIMEOUT = 600000; // 10 minutes
 const float BACKLIGHT_DISTANCE_THRESHOLD = 100.0;       // cm
+unsigned long BACKLIGHT_SET_BY_TOUCH_AT = 0;
+const unsigned long BACKLIGHT_TOUCH_COOLDOWN = 10 * 60 * 1000; // 10 phút sau khi touch thì ignore ultrasonic
 
 unsigned long lastLCDUpdate = 0;
 const long LCD_INTERVAL = 5000;
@@ -62,7 +65,7 @@ unsigned long lastDistanceRead = 0;
 const long    DISTANCE_INTERVAL = 2000;  // 2 seconds
 float         lastDistance = -1;         // lưu giá trị cũ để so sánh
 unsigned long lastCloseDetectionTime = 0;  // khi đầu tiên phát hiện khoảng cách < 100cm
-const unsigned long CLOSE_DETECTION_TIMEOUT = 2000;  // phải detect liên tục trong 2s mới bật
+const unsigned long CLOSE_DETECTION_TIMEOUT = 5000;  // phải detect liên tục trong 5s mới bật
 // ================== RECONNECT ==================
 // FIX: Non-blocking reconnect với cooldown
 
@@ -283,8 +286,9 @@ void handleUltrasonic() {
       log("ULTRASONIC", "Close detection started (" + String(distance, 1) + "cm) - waiting 2s...");
     } else {
       // Kiểm tra xem đã detect liên tục được 2 giây chưa
+      // phần bật đèn tự động sử dụng cảm biến siêu âm
       unsigned long detectionDuration = millis() - lastCloseDetectionTime;
-      if (detectionDuration >= CLOSE_DETECTION_TIMEOUT && !lcdBacklight) {
+      if (detectionDuration >= CLOSE_DETECTION_TIMEOUT && !lcdBacklight && millis() - BACKLIGHT_SET_BY_TOUCH_AT > BACKLIGHT_TOUCH_COOLDOWN) { // chỉ bật nếu chưa bật và đã detect đủ lâu và đã đủ lâu sau touch
         setBacklight(true);
         log("LCD", "Ultrasonic detected presence (" + String(detectionDuration) + "ms) → backlight ON");
       }
@@ -424,8 +428,9 @@ void loop() {
   handleTouch(currentPage, lastPageUpdate);
   handleDHT(lastTemp, lastHum);
   handleUltrasonic();
-
+  
   handleBacklightAutoOff();
-
+  
   handleLCD();
+  // handleSecondaryTouch();
 }

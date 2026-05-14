@@ -154,11 +154,13 @@ String PageManager::formatUptime(unsigned long milliseconds) {
   unsigned long totalSeconds = milliseconds / 1000;
   unsigned long days = totalSeconds / 86400;
   unsigned long hours = (totalSeconds % 86400) / 3600;
-  unsigned long seconds = totalSeconds % 3600;
+  unsigned long minutes = (totalSeconds % 3600) / 60;
+  unsigned long seconds = totalSeconds % 60;
 
   String result = "";
   if (days > 0) result += String(days) + "d";
   if (hours > 0) result += String(hours) + "h";
+  if (minutes > 0) result += String(minutes) + "m";
   result += String(seconds) + "s";
 
   return result;
