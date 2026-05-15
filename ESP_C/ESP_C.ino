@@ -29,6 +29,13 @@ const char* password = "24082002";
 #define TOUCH_PIN D0
 #define TOUCH_PIN_2 A0
 
+// ================= ESPD_STATE ==================
+String ESPD_RELAY1_SET = "espD/relay1/set";
+String ESPD_RELAY2_SET = "espD/relay2/set";
+String ESPD_SERVO1_SET = "espD/servo1/set";
+String ESPD_SERVO2_SET = "espD/servo2/set";
+String ESPD_FAN_SET = "espD/fan/set";
+
 // ================== OBJECT ==================
 WiFiClient   espClient;
 PubSubClient client(espClient);

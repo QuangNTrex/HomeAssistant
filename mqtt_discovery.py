@@ -151,6 +151,18 @@ def setup_espC():
         }
     )
 
+    publish_config(
+        "homeassistant/sensor/espC_ultrasonic_distance/config",
+        {
+            "name": "Ultrasonic Distance",
+            "state_topic": "espC/distance",
+            "unit_of_measurement": "cm",
+            "state_class": "measurement",
+            "unique_id": "espC_ultrasonic_distance",
+            "device": device_espC
+        }
+    )
+
 # ================== ESP D ==================
 def setup_espD():
 

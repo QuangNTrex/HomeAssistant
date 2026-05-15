@@ -8,11 +8,18 @@ extern bool relayState[3];
 extern bool lcdBacklight;
 extern unsigned long BACKLIGHT_SET_BY_TOUCH_AT;
 
+extern String ESPD_RELAY1_SET;
+extern String ESPD_RELAY2_SET;
+extern String ESPD_SERVO1_SET;
+extern String ESPD_SERVO2_SET;
+extern String ESPD_FAN_SET;
+
 extern void log(const String& tag, const String& msg);
 extern void toggleBacklight();
 extern void setBacklight(bool state);
 extern void toggleRelay(int index);
 extern void showEvent(const String& l1, const String& l2);
+extern bool safePub(const char* topic, const char* payload, bool retained = false);
 
 enum TouchPhase {
   TOUCH_IDLE,
@@ -55,19 +62,23 @@ static void handleHold() {
 
 //hello
 void singleTouch2() {
-  log("TOUCH2", "1 tap → toggle relay3");
+  safePub(ESPD_RELAY1_SET.c_str(), "TOGGLE", true);
+  log("TOUCH2", "1 tap → toggle relay1 (MQTT)");
 }
 
 void doubleTouch2() {
-  log("TOUCH2", "2 tap → backlight ON");
+  safePub(ESPD_SERVO1_SET.c_str(), "TOGGLE", true);
+  log("TOUCH2", "2 tap → toggle servo 1 (MQTT)");
 }
 
 void tripleTouch2() {
-  log("TOUCH2", "3 tap → toggle backlight");
+  safePub(ESPD_SERVO2_SET.c_str(), "TOGGLE", true);
+  log("TOUCH2", "3 tap → toggle servo 2 (MQTT)");
 }
 
 void holdTouch2() {
-  log("TOUCH2", "HOLD detected");
+  safePub(ESPD_FAN_SET.c_str(), "TOGGLE", true);
+  log("TOUCH2", "HOLD → toggle fan (MQTT)");
 }
 
 // =====================================================
