@@ -432,5 +432,5 @@ void loop() {
   handleBacklightAutoOff();
   
   handleLCD();
-  // handleSecondaryTouch();
+  handleSecondaryTouch();
 }
