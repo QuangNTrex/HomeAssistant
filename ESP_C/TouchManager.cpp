@@ -153,8 +153,7 @@ void handleTouch(int& currentPage, unsigned long& lastPageUpdate) {
 // =====================================================
 
 
- void handleSecondaryTouch() {
-
+void handleSecondaryTouch() {
   // ================= PERFORMANCE FIX =================
   static unsigned long lastRead = 0;
 
