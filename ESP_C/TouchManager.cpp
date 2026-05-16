@@ -6,13 +6,17 @@ extern LiquidCrystal_I2C lcd;
 extern PageManager pageManager;
 extern bool relayState[3];
 extern bool lcdBacklight;
-extern unsigned long BACKLIGHT_SET_BY_TOUCH_AT;
+extern unsigned long BACKLIGHT_SET_BY_USER_AT;
 
 extern String ESPD_RELAY1_SET;
 extern String ESPD_RELAY2_SET;
 extern String ESPD_SERVO1_SET;
 extern String ESPD_SERVO2_SET;
 extern String ESPD_FAN_SET;
+
+extern long espDRelayStates[3];
+extern long espDServoStates[3];
+extern long espDFanState;
 
 extern void log(const String& tag, const String& msg);
 extern void toggleBacklight();
@@ -51,7 +55,7 @@ void touchBegin() {
 
 static void handleHold() {
   toggleBacklight();
-  BACKLIGHT_SET_BY_TOUCH_AT = millis();
+  BACKLIGHT_SET_BY_USER_AT = millis();
 
   log("TOUCH", "HOLD detected → TOGGLE backlight");
 }
@@ -64,21 +68,25 @@ static void handleHold() {
 void singleTouch2() {
   safePub(ESPD_RELAY1_SET.c_str(), "TOGGLE", true);
   log("TOUCH2", "1 tap → toggle relay1 (MQTT)");
+  //showEvent("Tap ESP_D Relay 1", !espDRelayStates[0] ? "Turned ON" : "Turned OFF");
 }
 
 void doubleTouch2() {
   safePub(ESPD_SERVO1_SET.c_str(), "TOGGLE", true);
   log("TOUCH2", "2 tap → toggle servo 1 (MQTT)");
+  //showEvent("Tap ESP_D Servo 1", !espDServoStates[0] ? "Turned ON" : "Turned OFF");
 }
 
 void tripleTouch2() {
   safePub(ESPD_SERVO2_SET.c_str(), "TOGGLE", true);
   log("TOUCH2", "3 tap → toggle servo 2 (MQTT)");
+  //showEvent("Tap ESP_D Servo 2", !espDServoStates[1] ? "Turned ON" : "Turned OFF");
 }
 
 void holdTouch2() {
   safePub(ESPD_FAN_SET.c_str(), "TOGGLE", true);
   log("TOUCH2", "HOLD → toggle fan (MQTT)");
+  //showEvent("Tap ESP_D Fan", !espDFanState ? "Turned ON" : "Turned OFF");
 }
 
 // =====================================================
@@ -130,7 +138,7 @@ void handleTouch(int& currentPage, unsigned long& lastPageUpdate) {
         
       int next = (currentPage == PAGE_EVENT)
                 ? PAGE_CLOCK
-                : (currentPage + 1) % 4;
+                : (currentPage + 1) % 5;
       currentPage    = next;
       lastPageUpdate = millis();
       pageManager.notifyTimeoutPage(next);

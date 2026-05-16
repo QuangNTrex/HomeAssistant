@@ -5,7 +5,7 @@
 #include <time.h>
 #include <PubSubClient.h>
 
-enum Page { PAGE_CLOCK = 0, PAGE_GREETING = 1, PAGE_SYSTEM = 2, PAGE_EVENT = 1000, PAGE_LOG = 3 };
+enum Page { PAGE_CLOCK = 0, PAGE_GREETING = 1, PAGE_TEMP_HUM = 2, PAGE_SYSTEM = 3, PAGE_LOG = 4, PAGE_EVENT = 1000 };
 
 class PageManager {
 private:
@@ -22,7 +22,7 @@ private:
   String eventLine1 = "";
   String eventLine2 = "";
   unsigned long eventShownAt = 0;
-  const unsigned long RETURN_TO_CLOCK = 30000;      // SYSTEM & LOG: 30s
+  const unsigned long RETURN_TO_CLOCK = 30000;      // SYSTEM & LOG & TEMP_HUM: 30s
   const unsigned long RETURN_TO_CLOCK_BY_EVENT = 5000;  // EVENT: 5s
 
   // Log state (chỉ PageManager quản lý)
@@ -36,6 +36,7 @@ private:
   void pageSystem();
   void pageEvent();
   void pageLog();
+  void pageTempHum(float tempInside, float humInside, float tempOutside, float humOutside);
 
   // Helper function to format uptime
   String formatUptime(unsigned long milliseconds);

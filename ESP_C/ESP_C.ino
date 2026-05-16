@@ -36,6 +36,26 @@ String ESPD_SERVO1_SET = "espD/servo1/set";
 String ESPD_SERVO2_SET = "espD/servo2/set";
 String ESPD_FAN_SET = "espD/fan/set";
 
+String ESPD_RELAY1_STATE = "espD/relay1/state";
+String ESPD_RELAY2_STATE = "espD/relay2/state";
+String ESPD_SERVO1_STATE = "espD/servo1/state";
+String ESPD_SERVO2_STATE = "espD/servo2/state";
+String ESPD_FAN_STATE = "espD/fan/state";
+String ESP_TEMP = "espD/temp";
+String ESP_HUM = "espD/hum";
+
+// biến lưu trạng thái thiết bị bên ESP_D, cập nhật khi nhận MQTT
+bool espDRelayStates[3] = {false, false, false};
+bool espDServoStates[3] = {false, false, false};
+bool espDFanState = false;
+float espDTemp = 0;
+float espDHum = 0;
+
+// kiểm tra xem có cập nhật mới từ ESP_D không (MQTT callback sẽ set flag này)
+long espDRelayUpdatedAt[3] = {0, 0, 0};
+long espDServoUpdatedAt[3] = {0, 0, 0};
+long espDFanUpdatedAt = 0;
+
 // ================== OBJECT ==================
 WiFiClient   espClient;
 PubSubClient client(espClient);
@@ -50,7 +70,7 @@ bool lcdBacklight = true;
 unsigned long lastBacklightOn = 0;
 const unsigned long BACKLIGHT_AUTO_OFF_TIMEOUT = 600000; // 10 minutes
 const float BACKLIGHT_DISTANCE_THRESHOLD = 100.0;       // cm
-unsigned long BACKLIGHT_SET_BY_TOUCH_AT = 0;
+unsigned long BACKLIGHT_SET_BY_USER_AT = 0;
 const unsigned long BACKLIGHT_TOUCH_COOLDOWN = 10 * 60 * 1000; // 10 phút sau khi touch thì ignore ultrasonic
 
 unsigned long lastLCDUpdate = 0;
@@ -227,7 +247,43 @@ void callback(char* topic, byte* payload, unsigned int length) {
   }
   else if (t == "espC/lcd/backlight/set") {
     if      (msg == "ON")  { setBacklight(true);  showEvent("Backlight", "Turned ON");  }
-    else if (msg == "OFF") { setBacklight(false); showEvent("Backlight", "Turned OFF"); }
+    else if (msg == "OFF") { setBacklight(false); showEvent("Backlight", "Turned OFF"); BACKLIGHT_SET_BY_USER_AT = millis(); } // khi tắt bằng MQTT thì coi như user set, bật lại sẽ phải chờ cooldown
+  }
+  else if (t == "espD/relay1/state") {
+    espDRelayStates[0] = (msg == "ON");
+    espDRelayUpdatedAt[0] = millis();
+    log("MQTT", "Updated ESP_D Relay 1 state: " + String(msg));
+    showEvent("ESP_D Relay 1", String("State: ") + (espDRelayStates[0] ? "ON" : "OFF"));
+  }
+  else if (t == "espD/relay2/state") {
+    espDRelayStates[1] = (msg == "ON");
+    espDRelayUpdatedAt[1] = millis();
+    log("MQTT", "Updated ESP_D Relay 2 state: " + String(msg));
+    showEvent("ESP_D Relay 2", String("State: ") + (espDRelayStates[1] ? "ON" : "OFF"));
+  }
+  else if (t == "espD/servo1/state") {
+    espDServoStates[0] = (msg == "ON");
+    espDServoUpdatedAt[0] = millis();
+    log("MQTT", "Updated ESP_D Servo 1 state: " + String(msg));
+    showEvent("ESP_D Servo 1", String("State: ") + (espDServoStates[0] ? "ON" : "OFF"));
+  }
+  else if (t == "espD/servo2/state") {
+    espDServoStates[1] = (msg == "ON");
+    espDServoUpdatedAt[1] = millis();
+    log("MQTT", "Updated ESP_D Servo 2 state: " + String(msg));
+    showEvent("ESP_D Servo 2", String("State: ") + (espDServoStates[1] ? "ON" : "OFF"));
+  }
+  else if (t == "espD/fan/state") {
+    espDFanState = (msg == "ON");
+    espDFanUpdatedAt = millis();
+    log("MQTT", "Updated ESP_D Fan state: " + String(msg));
+    showEvent("ESP_D Fan", String("State: ") + (espDFanState ? "ON" : "OFF"));
+  }
+  else if (t == "espD/temp") {
+    espDTemp = msg.toFloat();
+  }
+  else if (t == "espD/hum") {
+    espDHum = msg.toFloat();
   }
 }
 
@@ -295,7 +351,7 @@ void handleUltrasonic() {
       // Kiểm tra xem đã detect liên tục được 2 giây chưa
       // phần bật đèn tự động sử dụng cảm biến siêu âm
       unsigned long detectionDuration = millis() - lastCloseDetectionTime;
-      if (detectionDuration >= CLOSE_DETECTION_TIMEOUT && !lcdBacklight && millis() - BACKLIGHT_SET_BY_TOUCH_AT > BACKLIGHT_TOUCH_COOLDOWN) { // chỉ bật nếu chưa bật và đã detect đủ lâu và đã đủ lâu sau touch
+      if (detectionDuration >= CLOSE_DETECTION_TIMEOUT && !lcdBacklight && millis() - BACKLIGHT_SET_BY_USER_AT > BACKLIGHT_TOUCH_COOLDOWN) { // chỉ bật nếu chưa bật và đã detect đủ lâu và đã đủ lâu sau touch
         setBacklight(true);
         log("LCD", "Ultrasonic detected presence (" + String(detectionDuration) + "ms) → backlight ON");
       }

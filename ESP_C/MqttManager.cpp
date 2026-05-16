@@ -9,6 +9,14 @@ extern void log(const String& tag, const String& msg);
 
 extern PubSubClient client;
 
+extern String ESPD_RELAY1_STATE;
+extern String ESPD_RELAY2_STATE;
+extern String ESPD_SERVO1_STATE;
+extern String ESPD_SERVO2_STATE;
+extern String ESPD_FAN_STATE;
+extern String ESP_TEMP;
+extern String ESP_HUM;
+
 const char* mqtt_server = "192.168.0.100";
 const int   mqtt_port   = 1883;
 
@@ -70,6 +78,14 @@ bool mqttReconnect() {
     client.subscribe("espC/relay2/set");
     client.subscribe("espC/relay3/set");
     client.subscribe("espC/lcd/backlight/set");
+
+    client.subscribe("espD/relay1/state");
+    client.subscribe("espD/relay2/state");
+    client.subscribe("espD/servo1/state");
+    client.subscribe("espD/servo2/state");
+    client.subscribe("espD/fan/state");
+    client.subscribe("espD/temp");
+    client.subscribe("espD/hum");
 
     log("MQTT", "Subscribed to relay topics");
     return true;

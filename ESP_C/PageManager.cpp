@@ -5,6 +5,10 @@
 // Forward declarations for functions from main
 extern float comfortIndex(float t, float h);
 extern void log(const String& tag, const String& msg);
+extern float computeHeatIndex(float t, float h);
+extern float comfortIndex(float t, float h);
+extern float espDTemp;
+extern float espDHum;
 
 struct ReplaceRule {
 const char* from;
@@ -183,7 +187,7 @@ void PageManager::setLog(const String& tag, const String& msg) {
 }
 
 void PageManager::notifyTimeoutPage(int page) {
-  if (page == PAGE_SYSTEM || page == PAGE_LOG || page == PAGE_EVENT) {
+  if (page == PAGE_SYSTEM || page == PAGE_LOG || page == PAGE_EVENT || page == PAGE_TEMP_HUM) {
     eventShownAt = millis();
   } else {
     eventShownAt = 0;
@@ -206,8 +210,8 @@ void PageManager::handleLCD(int& currentPage, unsigned long& lastLCDUpdate, cons
     lastPage = -1;
   }
 
-  // SYSTEM & LOG: sau RETURN_TO_CLOCK ms (30s) về CLOCK
-  if ((currentPage == PAGE_SYSTEM || currentPage == PAGE_LOG)
+  // SYSTEM & LOG & TEMP_HUM: sau RETURN_TO_CLOCK ms (30s) về CLOCK
+  if ((currentPage == PAGE_SYSTEM || currentPage == PAGE_LOG || currentPage == PAGE_TEMP_HUM)
       && eventShownAt != 0
       && (now - eventShownAt >= RETURN_TO_CLOCK)) {
     currentPage   = PAGE_CLOCK;
@@ -249,7 +253,35 @@ void PageManager::handleLCD(int& currentPage, unsigned long& lastLCDUpdate, cons
     case PAGE_SYSTEM:   pageSystem();   break;
     case PAGE_EVENT:    pageEvent();    break;
     case PAGE_LOG:      pageLog();      break;
+    case PAGE_TEMP_HUM: pageTempHum(lastTemp, lastHum, espDTemp, espDHum); break;
+    default:           pageClock(lastTemp, lastHum);    break;
   }
 
   lastPage = currentPage;
+}
+
+void PageManager::pageTempHum(float tempInside, float humInside, float tempOutside, float humOutside) {
+  char line1[17];
+  char line2[17];
+  float tempFeelingInside = computeHeatIndex(tempInside, humInside);
+  float tempFeelingOutside = computeHeatIndex(tempOutside, humOutside);
+  float tempIndexInside = comfortIndex(tempInside, humInside);
+  float tempIndexOutside = comfortIndex(tempOutside, humOutside);
+
+  snprintf(line1, sizeof(line1),
+           "I%2.1f %2.0f %2.0f %.2f",
+           tempInside,
+           humInside,
+           tempFeelingInside,
+           tempIndexInside);
+
+  snprintf(line2, sizeof(line2),
+           "O%2.1f %2.0f %2.0f %.2f",
+           tempOutside,
+           humOutside,
+           tempFeelingOutside,
+           tempIndexOutside);
+
+  lcd.setCursor(0,0); lcd.print(line1);
+  lcd.setCursor(0,1); lcd.print(line2);
 }

@@ -364,7 +364,6 @@ void handleDHT() {
     return;
   }
 
-  // h = h - DOWN_HUMI;
   temperature = t;
   humidity = h;
 
