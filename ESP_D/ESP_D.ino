@@ -28,17 +28,20 @@ const int SERVO_ON_ANGLE  = 180;
 // FIX: Tăng thời gian chờ servo di chuyển từ 250ms → 400ms
 // Servo thường cần 300-400ms để đi từ 100° → 180°
 const unsigned long SERVO_DETACH_DELAY = 400;
+const int ANALOG_READ_DELAY = 35; // Giảm tần suất đọc cảm biến chạm để tiết kiệm CPU
+long lastAnalogReadTime = 0;
 
 // ================== PIN ==================
+#define TOUCH_KITCHEN A0
+#define TOUCH_PIN  D0
 #define RELAY1_PIN D1
 #define RELAY2_PIN D2
+#define DHT_PIN    D3
+#define LIGHT_PIN  D4
 #define SERVO1_PIN D5
 #define SERVO2_PIN D6
 #define MOTION_PIN D7
-#define TOUCH_PIN  D0
-#define LIGHT_PIN  D4
 #define FAN_PIN    D8
-#define DHT_PIN    D3
 #define DHT_TYPE   DHT22
 
 DHT dht(DHT_PIN, DHT_TYPE);
@@ -65,8 +68,8 @@ bool fanState      = false;
 unsigned long servoTimer[2]  = {0, 0};
 bool          servoActive[2] = {false, false};
 
-const int LIGHT_ON      = LOW;
-const int LIGHT_OFF     = HIGH;
+const int LIGHT_ON      = HIGH;
+const int LIGHT_OFF     = LOW;
 const int FAN_ON_SPEED  = 1024;
 const int FAN_OFF_SPEED = 0;
 
@@ -495,6 +498,8 @@ void reconnect() {
 
   if (client.connect("espD", nullptr, nullptr, "espD/status", 0, true, "offline")) {
     log("MQTT", "Connected!");
+    // 
+
     client.publish("espD/status", "online", true);
     client.subscribe("espD/relay1/set");
     client.subscribe("espD/relay2/set");
@@ -536,7 +541,11 @@ void handleMotion() {
 //  TOUCH STATE MACHINE (NON-BLOCKING)
 // ============================================================
 void handleTouch() {
-  bool currentState = digitalRead(TOUCH_PIN);
+  if (millis() - lastAnalogReadTime < ANALOG_READ_DELAY) return;
+  lastAnalogReadTime = millis();  
+  bool currentStateOfTouchKitchen = analogRead(TOUCH_KITCHEN) > 500; // Giả sử ngưỡng chạm là 1000
+  bool currentState = digitalRead(TOUCH_PIN) ? HIGH : currentStateOfTouchKitchen; // Kết hợp cả 2 cảm biến chạm
+
   unsigned long now = millis();
 
   // Phát hiện chạm (cạnh lên: LOW → HIGH)
@@ -609,6 +618,9 @@ void setup() {
 
   digitalWrite(RELAY1_PIN, LOW);
   digitalWrite(RELAY2_PIN, LOW);
+  setServo(0, false);
+  setServo(1, false);
+  
   digitalWrite(LIGHT_PIN,  LIGHT_OFF);
   analogWrite(FAN_PIN,    FAN_OFF_SPEED);
   log("BOOT", "Pins initialized");

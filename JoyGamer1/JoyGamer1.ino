@@ -1,6 +1,10 @@
 #include <BleKeyboard.h>
+#include <Preferences.h> // 1. THÊM THƯ VIỆN LƯU TRỮ
+
+#define KEY_NUM_LOCK 0xDB
 
 BleKeyboard bleKeyboard("Joy Gamer", "DIY Creator", 100);
+Preferences preferences; // 2. KHỞI TẠO ĐỐI TƯỢNG PREFERENCES
 
 const int LED_PIN = 2; 
 
@@ -27,7 +31,7 @@ const int ESP8266_JOY_HIGH   = 800;
 int subX = 512;
 int subA = 1, subB = 1, subC = 1, subD = 1, subE = 1, subF = 1, subK = 1;
 
-// CẤU TRÚC PROFILE GAME
+// CẤU TRÚC PROFILE GAME (Đã thêm t2_e và t2_f)
 struct GameProfile {
   // Hướng di chuyển (Joystick)
   uint8_t t1_left; uint8_t t1_right; uint8_t t1_up; uint8_t t1_down;
@@ -35,40 +39,40 @@ struct GameProfile {
 
   // Các nút bấm hành động tương ứng từng chân phần cứng
   uint8_t t1_k; uint8_t t1_a; uint8_t t1_b; uint8_t t1_c; uint8_t t1_d; uint8_t t1_e;
-  uint8_t t2_k; uint8_t t2_a; uint8_t t2_b; uint8_t t2_c; uint8_t t2_d; uint8_t t2_e; uint8_t t2_f; // Nút E, F của Tay 2 nếu cần có thể map thêm, nếu không dùng thì để 0 (không gửi phím)
+  uint8_t t2_k; uint8_t t2_a; uint8_t t2_b; uint8_t t2_c; uint8_t t2_d; uint8_t t2_e; uint8_t t2_f;
 };
 
 // Profile 0: pr ađa
 GameProfile profile0 = { 
   'a', 'd', 'w', 's',  KEY_LEFT_ARROW, KEY_RIGHT_ARROW, KEY_UP_ARROW, KEY_DOWN_ARROW,
   0, 'w', 'd', 's', 'a', 0,
-  0, KEY_UP_ARROW, KEY_LEFT_ARROW, KEY_DOWN_ARROW, KEY_RIGHT_ARROW
+  0, KEY_UP_ARROW, KEY_LEFT_ARROW, KEY_DOWN_ARROW, KEY_RIGHT_ARROW, 0, 0
 };
 
 // Profile 1: bad ice
 GameProfile profile1 = { 
   'a', 'd', 'w', 's',  KEY_LEFT_ARROW, KEY_RIGHT_ARROW, KEY_UP_ARROW, KEY_DOWN_ARROW,
   0, 'q', 0, 0, 0, 'r',
-  0, ' ', 0, 0, 0
+  0, ' ', 0, 0, 0, 0, 0
 };
 
-// Profile 2: Songoku 2.5
+// Profile 2: Songoku 2.5 (Đã cấu hình nút F thành phím gồng KEY_NUM_3)
 GameProfile profile2 = { 
   'a', 'd', 'w', 's',  KEY_LEFT_ARROW, KEY_RIGHT_ARROW, KEY_UP_ARROW, KEY_DOWN_ARROW,
   'l', 'k', 'o', 'i', 'j', 'u',
-  KEY_NUM_3, KEY_NUM_2, KEY_NUM_6, KEY_NUM_5, KEY_NUM_1
+  KEY_NUM_3, KEY_NUM_2, KEY_NUM_6, KEY_NUM_5, KEY_NUM_1, KEY_NUM_4, KEY_NUM_LOCK
 };
 
 GameProfile activeProfiles[] = {profile0, profile1, profile2};
 int currentProfileIndex = 0; 
 const int TOTAL_PROFILES = sizeof(activeProfiles) / sizeof(activeProfiles[0]);
 
-unsigned long lastScanTime = 0;     
+unsigned long lastScanTime = 0;    
 unsigned long lastLedToggle = 0;    
 int ledFlashesCount = 0;            
 int ledState = LOW;
 
-// Mảng lưu trạng thái nút (Mở rộng kích thước lưu trạng thái nút ảo của Tay 2)
+// Mảng lưu trạng thái nút
 int lastButtonStates[40]; 
 int lastSubButtonStates[8]; // Lưu trạng thái cũ của [A, B, C, D, E, F, K] từ ESP8266
 bool isButtonInitialized = false; 
@@ -106,13 +110,27 @@ void setup() {
   // Khởi tạo trạng thái mảng nút phụ ảo (mặc định là nhả = RELEASED = 1)
   for (int i = 0; i < 8; i++) lastSubButtonStates[i] = RELEASED;
 
-  triggerLedBlink(1); 
+  // 3. ĐỌC PROFILE ĐÃ LƯU TỪ BỘ NHỚ KHỞI ĐỘNG
+  preferences.begin("gamepad", false); // Mở không gian bộ nhớ tên "gamepad"
+  currentProfileIndex = preferences.getInt("profile", 0); // Đọc biến "profile", mặc định = 0 nếu chưa từng lưu
+  preferences.end(); // Đóng lại để giải phóng bộ nhớ
+
+  // Kiểm tra an toàn phòng trường hợp dữ liệu rác ngoài phạm vi mảng
+  if (currentProfileIndex >= TOTAL_PROFILES || currentProfileIndex < 0) {
+    currentProfileIndex = 0;
+  }
+
+  Serial.print("--- KHI PHOI DONG: Da load Profile index: "); 
+  Serial.println(currentProfileIndex);
+
+  // Nháy LED báo hiệu profile hiện tại ngay khi khởi động
+  triggerLedBlink(currentProfileIndex + 1); 
 }
 
 void loop() {
   unsigned long currentTime = millis();
 
-  // 1. NHẬN VÀ GIẢI MÃ CHUỖI DATA TỪ ESP8266 (TAY PHỤ) VỚI CẤU HÌNH MỚI
+  // 1. NHẬN VÀ GIẢI MÃ CHUỒI DATA TỪ ESP8266 (TAY PHỤ) VỚI CẤU HÌNH MỚI
   if (Serial2.available() > 0) {
     String data = Serial2.readStringUntil('\n');
     data.trim();
@@ -147,6 +165,14 @@ void loop() {
   if (lastButtonFState == RELEASED && currentButtonFState == PRESSED) {
     currentProfileIndex = (currentProfileIndex + 1) % TOTAL_PROFILES;
     bleKeyboard.releaseAll(); 
+    
+    // 4. LƯU PROFILE MỚI VÀO BỘ NHỚ FLASH TỨC THÌ
+    preferences.begin("gamepad", false);
+    preferences.putInt("profile", currentProfileIndex); // Lưu giá trị mới vào key "profile"
+    preferences.end();
+    
+    Serial.print("--- DA LUU PROFILE MOI: "); Serial.println(currentProfileIndex);
+
     triggerLedBlink(currentProfileIndex + 1); 
   }
   lastButtonFState = currentButtonFState; 
@@ -174,16 +200,16 @@ void loop() {
       checkButton(JOY1_D, p.t1_d); checkButton(JOY1_E, p.t1_e); 
 
       // --- XỬ LÝ TAY CẦM 2 (Hỗn hợp nhận từ Serial + Analog Trục Y trực tiếp) ---
-      // Trục X dùng dải ESP8266 (0-1023), Trục Y dùng dải ESP32 (0-4095)
       checkJoystick(subX, analogRead(JOY2_Y), p.t2_left, p.t2_right, p.t2_up, p.t2_down, 1, ESP8266_JOY_LOW, ESP8266_JOY_HIGH);
       
-      // Quét các nút ảo được xử lý từ luồng dữ liệu của ESP8266
+      // Quét toàn bộ các nút bấm từ luồng dữ liệu của ESP8266 bao gồm cả nút E và F mới
       checkSubButton(subA, lastSubButtonStates[0], p.t2_a, "Sub_A");
       checkSubButton(subB, lastSubButtonStates[1], p.t2_b, "Sub_B");
       checkSubButton(subC, lastSubButtonStates[2], p.t2_c, "Sub_C");
       checkSubButton(subD, lastSubButtonStates[3], p.t2_d, "Sub_D");
+      checkSubButton(subE, lastSubButtonStates[5], p.t2_e, "Sub_E"); // Thêm nút E
+      checkSubButton(subF, lastSubButtonStates[6], p.t2_f, "Sub_F"); // Thêm nút F (gán Num_3 trong Profile 2)
       checkSubButton(subK, lastSubButtonStates[4], p.t2_k, "Sub_K"); 
-      // Các nút ảo E, F của Tay 2 nếu không map trong profile có thể bỏ qua hoặc xử lý thêm tương tự nếu cần.
     }
   }
 }
@@ -199,7 +225,6 @@ void triggerLedBlink(int flashes) {
   digitalWrite(LED_PIN, ledState);
 }
 
-// Xử lý nút bấm vật lý trực tiếp trên ESP32
 void checkButton(int pin, uint8_t key) {
   if (key == 0) return; 
   int currentState = digitalRead(pin);
@@ -224,7 +249,6 @@ void checkButton(int pin, uint8_t key) {
   }
 }
 
-// Xử lý nút bấm ảo nhận từ cổng Serial của ESP8266
 void checkSubButton(int currentVirtualState, int &lastVirtualState, uint8_t key, const char* btnName) {
   if (key == 0) return;
   
@@ -233,6 +257,7 @@ void checkSubButton(int currentVirtualState, int &lastVirtualState, uint8_t key,
       bleKeyboard.press(key);
       Serial.print("-> TAY 2 ["); Serial.print(btnName); Serial.print("] PRESSED. Sent key: '"); Serial.print((char)key); Serial.println("'");
     } else {
+      delay(30); // Giữ phím đủ lâu giúp game nhận diện ổn định
       bleKeyboard.release(key);
       Serial.print("<- TAY 2 ["); Serial.print(btnName); Serial.print("] RELEASED. Released key: '"); Serial.print((char)key); Serial.println("'");
     }
@@ -240,20 +265,16 @@ void checkSubButton(int currentVirtualState, int &lastVirtualState, uint8_t key,
   }
 }
 
-// Xử lý chuyển động Joystick với tham số cấu hình ngưỡng linh hoạt cho từng dòng chip
 void checkJoystick(int xVal, int yVal, uint8_t keyLeft, uint8_t keyRight, uint8_t keyUp, uint8_t keyDown, int joyIndex, int threshLow, int threshHigh) {  
-  // --- TRỤC X: TRÁI / PHẢI ---
   if (keyLeft != 0) {
     if (xVal < threshLow && !isLeftPressedGlobal[joyIndex]) {
       bleKeyboard.press(keyLeft); 
       isLeftPressedGlobal[joyIndex] = true; 
       lastLeftKeyGlobal[joyIndex] = keyLeft;
-      Serial.print("-> TAY "); Serial.print(joyIndex + 1); Serial.print(" gạt TRÁI. Sent key: '"); Serial.print((char)keyLeft); Serial.println("'");
     } 
     else if (xVal >= threshLow && isLeftPressedGlobal[joyIndex]) {
       bleKeyboard.release(lastLeftKeyGlobal[joyIndex]); 
       isLeftPressedGlobal[joyIndex] = false;
-      Serial.print("<- TAY "); Serial.print(joyIndex + 1); Serial.print(" thả TRÁI. Released key: '"); Serial.print((char)lastLeftKeyGlobal[joyIndex]); Serial.println("'");
     }
   }
   
@@ -262,28 +283,22 @@ void checkJoystick(int xVal, int yVal, uint8_t keyLeft, uint8_t keyRight, uint8_
       bleKeyboard.press(keyRight); 
       isRightPressedGlobal[joyIndex] = true; 
       lastRightKeyGlobal[joyIndex] = keyRight;
-      Serial.print("-> TAY "); Serial.print(joyIndex + 1); Serial.print(" gạt PHẢI. Sent key: '"); Serial.print((char)keyRight); Serial.println("'");
     } 
     else if (xVal <= threshHigh && isRightPressedGlobal[joyIndex]) {
       bleKeyboard.release(lastRightKeyGlobal[joyIndex]); 
       isRightPressedGlobal[joyIndex] = false;
-      Serial.print("<- TAY "); Serial.print(joyIndex + 1); Serial.print(" thả PHẢI. Released key: '"); Serial.print((char)lastRightKeyGlobal[joyIndex]); Serial.println("'");
     }
   }
   
-  // --- TRỤC Y: LÊN / XUỐNG ---
-  // Lưu ý: Tay 1 và Tay 2 đều đọc trục Y bằng chip ESP32 (Chân 39 và Chân 35) nên phần này sẽ tự động áp dụng đúng dải analog của ESP32 (JOY_THRESHOLD_LOW/HIGH)
   if (keyUp != 0) {
     if (yVal > JOY_THRESHOLD_HIGH && !isUpPressedGlobal[joyIndex]) {
       bleKeyboard.press(keyUp); 
       isUpPressedGlobal[joyIndex] = true; 
       lastUpKeyGlobal[joyIndex] = keyUp;
-      Serial.print("-> TAY "); Serial.print(joyIndex + 1); Serial.print(" gạt LÊN. Sent key: '"); Serial.print((char)keyUp); Serial.println("'");
     } 
     else if (yVal <= JOY_THRESHOLD_HIGH && isUpPressedGlobal[joyIndex]) {
       bleKeyboard.release(lastUpKeyGlobal[joyIndex]); 
       isUpPressedGlobal[joyIndex] = false;
-      Serial.print("<- TAY "); Serial.print(joyIndex + 1); Serial.print(" thả LÊN. Released key: '"); Serial.print((char)lastUpKeyGlobal[joyIndex]); Serial.println("'");
     }
   }
   
@@ -292,12 +307,10 @@ void checkJoystick(int xVal, int yVal, uint8_t keyLeft, uint8_t keyRight, uint8_
       bleKeyboard.press(keyDown); 
       isDownPressedGlobal[joyIndex] = true; 
       lastDownKeyGlobal[joyIndex] = keyDown;
-      Serial.print("-> TAY "); Serial.print(joyIndex + 1); Serial.print(" gạt XUỐNG. Sent key: '"); Serial.print((char)keyDown); Serial.println("'");
     } 
     else if (yVal >= JOY_THRESHOLD_LOW && isDownPressedGlobal[joyIndex]) {
       bleKeyboard.release(lastDownKeyGlobal[joyIndex]); 
       isDownPressedGlobal[joyIndex] = false;
-      Serial.print("<- TAY "); Serial.print(joyIndex + 1); Serial.print(" thả XUỐNG. Released key: '"); Serial.print((char)lastDownKeyGlobal[joyIndex]); Serial.println("'");
     }
   }
 }

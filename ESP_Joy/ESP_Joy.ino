@@ -7,27 +7,19 @@ const int LED_PIN = 2;
 const int PRESSED  = LOW;   
 const int RELEASED = HIGH;  
 
-// TAY CẦM 1 (Đọc trực tiếp bằng các chân vật lý trên ESP32)
+// TAY CẦM 1
 const int JOY1_X = 36; const int JOY1_Y = 39; const int JOY1_K = 12;
 const int JOY1_A = 32; const int JOY1_B = 33; const int JOY1_C = 25;
 const int JOY1_D = 26; const int JOY1_E = 27; const int JOY1_F = 13; // NÚT CHUYỂN PROFILE
 
-// TAY CẦM 2 (Xử lý hỗn hợp: Trục Y đọc trực tiếp, Trục X + Toàn bộ nút nhận qua Serial từ ESP8266)
-const int JOY2_Y = 35; // Nhận tín hiệu Analog trục Y trực tiếp từ tay phụ qua 1 sợi dây riêng
+// TAY CẦM 2
+const int JOY2_X = 34; const int JOY2_Y = 35;
+const int JOY2_A = 23; const int JOY2_B = 22; const int JOY2_C = 21; const int JOY2_D = 19;
 
-// Cấu hình ngưỡng gạt của Joystick
 const int JOY_THRESHOLD_LOW  = 600; 
 const int JOY_THRESHOLD_HIGH = 3400; 
 
-// Ngưỡng riêng cho ESP8266 (do dải ADC của ESP8266 là 10-bit: 0 - 1023)
-const int ESP8266_JOY_LOW    = 200;
-const int ESP8266_JOY_HIGH   = 800;
-
-// Biến lưu trạng thái ảo của Tay cầm 2 sau khi giải mã từ Serial gửi về
-int subX = 512;
-int subA = 1, subB = 1, subC = 1, subD = 1, subE = 1, subF = 1, subK = 1;
-
-// CẤU TRÚC PROFILE GAME
+// CẤU TRÚC ĐƯỢC CHUẨN HÓA (Phân tách rõ ràng cụm di chuyển và cụm nút hành động)
 struct GameProfile {
   // Hướng di chuyển (Joystick)
   uint8_t t1_left; uint8_t t1_right; uint8_t t1_up; uint8_t t1_down;
@@ -35,28 +27,39 @@ struct GameProfile {
 
   // Các nút bấm hành động tương ứng từng chân phần cứng
   uint8_t t1_k; uint8_t t1_a; uint8_t t1_b; uint8_t t1_c; uint8_t t1_d; uint8_t t1_e;
-  uint8_t t2_k; uint8_t t2_a; uint8_t t2_b; uint8_t t2_c; uint8_t t2_d; uint8_t t2_e; uint8_t t2_f; // Nút E, F của Tay 2 nếu cần có thể map thêm, nếu không dùng thì để 0 (không gửi phím)
+  uint8_t t2_k; uint8_t t2_a; uint8_t t2_b; uint8_t t2_c; uint8_t t2_d;
 };
+
+// =========================================================
+// KHỞI TẠO CÁC PROFILE ĐÃ ĐƯỢC SỬA LỖI ĐỦ PHẦN TỬ
+// =========================================================
 
 // Profile 0: pr ađa
 GameProfile profile0 = { 
+  // Di chuyển: Tay 1 | Tay 2
   'a', 'd', 'w', 's',  KEY_LEFT_ARROW, KEY_RIGHT_ARROW, KEY_UP_ARROW, KEY_DOWN_ARROW,
+  // Nút bấm: Tay 1 (K, A, B, C, D, E) | Tay 2 (K, A, B, C, D) -- Chân nào không dùng để 0
   0, 'w', 'd', 's', 'a', 0,
   0, KEY_UP_ARROW, KEY_LEFT_ARROW, KEY_DOWN_ARROW, KEY_RIGHT_ARROW
 };
 
 // Profile 1: bad ice
 GameProfile profile1 = { 
+  // Di chuyển: Tay 1 | Tay 2
   'a', 'd', 'w', 's',  KEY_LEFT_ARROW, KEY_RIGHT_ARROW, KEY_UP_ARROW, KEY_DOWN_ARROW,
+  // Nút bấm: Tay 1 (K, A, B, C, D, E) | Tay 2 (K, A, B, C, D)
   0, 'q', 0, 0, 0, 'r',
   0, ' ', 0, 0, 0
 };
 
-// Profile 2: Songoku 2.5
+// Profile 2: Songoku 2.5 (Đã sửa chuẩn hóa theo đúng bộ nút game gốc)
 GameProfile profile2 = { 
+  // Di chuyển: Tay 1 | Tay 2
   'a', 'd', 'w', 's',  KEY_LEFT_ARROW, KEY_RIGHT_ARROW, KEY_UP_ARROW, KEY_DOWN_ARROW,
+  // Nút hành động Tay 1 map vào: K=L(gồng), A=K(nhảy), B=O(biến hình), C=I(chưởng lớn), D=J(đấm), E=U(chưởng nhỏ)
   'l', 'k', 'o', 'i', 'j', 'u',
-  KEY_NUM_3, KEY_NUM_2, KEY_NUM_6, KEY_NUM_5, KEY_NUM_1
+  // Nút hành động Tay 2 map vào: K=3(gồng), A=2(nhảy), B=6(biến hình), C=5(chưởng lớn), D=1(đấm) -> nếu thiếu nút chưởng nhỏ '4' có thể bỏ qua tùy phần cứng
+  '3', '2', '6', '5', '1' 
 };
 
 GameProfile activeProfiles[] = {profile0, profile1, profile2};
@@ -68,9 +71,7 @@ unsigned long lastLedToggle = 0;
 int ledFlashesCount = 0;            
 int ledState = LOW;
 
-// Mảng lưu trạng thái nút (Mở rộng kích thước lưu trạng thái nút ảo của Tay 2)
 int lastButtonStates[40]; 
-int lastSubButtonStates[8]; // Lưu trạng thái cũ của [A, B, C, D, E, F, K] từ ESP8266
 bool isButtonInitialized = false; 
 
 bool isLeftPressedGlobal[2]  = {false, false};
@@ -87,62 +88,24 @@ int lastButtonFState = RELEASED;
 
 void triggerLedBlink(int flashes);
 void checkButton(int pin, uint8_t key);
-void checkSubButton(int currentVirtualState, int &lastVirtualState, uint8_t key, const char* btnName);
-void checkJoystick(int xVal, int yVal, uint8_t keyLeft, uint8_t keyRight, uint8_t keyUp, uint8_t keyDown, int joyIndex, int threshLow, int threshHigh);
+void checkJoystick(int xVal, int yVal, uint8_t keyLeft, uint8_t keyRight, uint8_t keyUp, uint8_t keyDown, int joyIndex);
 
 void setup() {
   Serial.begin(115200); 
-  
-  // Khởi tạo Serial2 để kết nối nhận data từ ESP8266: RX2 = GPIO16, TX2 = GPIO17
-  Serial2.begin(115200, SERIAL_8N1, 16, 17);
-  
   bleKeyboard.begin();
   pinMode(LED_PIN, OUTPUT);
   
-  // Cấu hình các chân vật lý hiện có trên Tay 1 của ESP32
-  int pins[] = {JOY1_K, JOY1_A, JOY1_B, JOY1_C, JOY1_D, JOY1_E, JOY1_F};
+  // Thêm JOY1_K và loại bỏ các chân thừa để tối ưu bộ nhớ cấu hình chân
+  int pins[] = {JOY1_K, JOY1_A, JOY1_B, JOY1_C, JOY1_D, JOY1_E, JOY1_F, JOY2_A, JOY2_B, JOY2_C, JOY2_D};
   for (int pin : pins) pinMode(pin, INPUT_PULLUP);
   
-  // Khởi tạo trạng thái mảng nút phụ ảo (mặc định là nhả = RELEASED = 1)
-  for (int i = 0; i < 8; i++) lastSubButtonStates[i] = RELEASED;
-
   triggerLedBlink(1); 
 }
 
 void loop() {
   unsigned long currentTime = millis();
 
-  // 1. NHẬN VÀ GIẢI MÃ CHUỖI DATA TỪ ESP8266 (TAY PHỤ) VỚI CẤU HÌNH MỚI
-  if (Serial2.available() > 0) {
-    String data = Serial2.readStringUntil('\n');
-    data.trim();
-    
-    if (data.length() > 0) {
-      String values[8]; 
-      int currentIndex = 0;
-      int pos = 0;
-      
-      // Tách chuỗi bằng dấu phẩy ','
-      while ((pos = data.indexOf(',')) != -1 && currentIndex < 7) {
-        values[currentIndex] = data.substring(0, pos);
-        data = data.substring(pos + 1);
-        currentIndex++;
-      }
-      values[currentIndex] = data; // Phần tử cuối cùng (Nút K)
-
-      // Cập nhật các biến trạng thái từ gói tin (TrụcX,A,B,C,D,E,F,K)
-      subX = values[0].toInt();
-      subA = values[1].toInt();
-      subB = values[2].toInt();
-      subC = values[3].toInt();
-      subD = values[4].toInt();
-      subE = values[5].toInt();
-      subF = values[6].toInt();
-      subK = values[7].toInt();
-    }
-  }
-
-  // 2. LOGIC CHUYỂN PROFILE (Nút F trên Tay 1 kích hoạt chuyển nhanh)
+  // 1. LOGIC CHUYỂN PROFILE
   int currentButtonFState = digitalRead(JOY1_F);
   if (lastButtonFState == RELEASED && currentButtonFState == PRESSED) {
     currentProfileIndex = (currentProfileIndex + 1) % TOTAL_PROFILES;
@@ -160,33 +123,27 @@ void loop() {
     }
   }
 
-  // 3. QUÉT VÀ TRUYỀN PHÍM CHU KỲ 10MS
+  // 2. QUÈT VÀ TRUYỀN PHÍM CHU KỲ 10MS
   if (currentTime - lastScanTime >= 10) {
     lastScanTime = currentTime;
 
     if (bleKeyboard.isConnected()) {
       GameProfile p = activeProfiles[currentProfileIndex]; 
 
-      // --- XỬ LÝ TAY CẦM 1 (Quét phần cứng trực tiếp) ---
-      checkJoystick(analogRead(JOY1_X), analogRead(JOY1_Y), p.t1_left, p.t1_right, p.t1_up, p.t1_down, 0, JOY_THRESHOLD_LOW, JOY_THRESHOLD_HIGH);
+      // QUÉT TAY CẦM 1 (Đã bổ sung nút JOY1_K)
+      checkJoystick(analogRead(JOY1_X), analogRead(JOY1_Y), p.t1_left, p.t1_right, p.t1_up, p.t1_down, 0);
       checkButton(JOY1_K, p.t1_k); 
       checkButton(JOY1_A, p.t1_a); checkButton(JOY1_B, p.t1_b); checkButton(JOY1_C, p.t1_c);
       checkButton(JOY1_D, p.t1_d); checkButton(JOY1_E, p.t1_e); 
 
-      // --- XỬ LÝ TAY CẦM 2 (Hỗn hợp nhận từ Serial + Analog Trục Y trực tiếp) ---
-      // Trục X dùng dải ESP8266 (0-1023), Trục Y dùng dải ESP32 (0-4095)
-      checkJoystick(subX, analogRead(JOY2_Y), p.t2_left, p.t2_right, p.t2_up, p.t2_down, 1, ESP8266_JOY_LOW, ESP8266_JOY_HIGH);
-      
-      // Quét các nút ảo được xử lý từ luồng dữ liệu của ESP8266
-      checkSubButton(subA, lastSubButtonStates[0], p.t2_a, "Sub_A");
-      checkSubButton(subB, lastSubButtonStates[1], p.t2_b, "Sub_B");
-      checkSubButton(subC, lastSubButtonStates[2], p.t2_c, "Sub_C");
-      checkSubButton(subD, lastSubButtonStates[3], p.t2_d, "Sub_D");
-      checkSubButton(subK, lastSubButtonStates[4], p.t2_k, "Sub_K"); 
-      // Các nút ảo E, F của Tay 2 nếu không map trong profile có thể bỏ qua hoặc xử lý thêm tương tự nếu cần.
+      // QUÉT TAY CẦM 2 (Đã bổ sung nút gạt tiềm năng ảo nếu có chân cơ lý / ở đây giữ nguyên số chân quét của bạn)
+      checkJoystick(analogRead(JOY2_X), analogRead(JOY2_Y), p.t2_left, p.t2_right, p.t2_up, p.t2_down, 1);
+      checkButton(JOY2_A, p.t2_a); checkButton(JOY2_B, p.t2_b); checkButton(JOY2_C, p.t2_c); checkButton(JOY2_D, p.t2_d);
     }
   }
 }
+
+// Giữ nguyên các hàm checkButton, checkJoystick và triggerLedBlink phía dưới của bạn...
 
 // =========================================================
 // CÁC HÀM XỬ LÝ CON
@@ -199,11 +156,12 @@ void triggerLedBlink(int flashes) {
   digitalWrite(LED_PIN, ledState);
 }
 
-// Xử lý nút bấm vật lý trực tiếp trên ESP32
 void checkButton(int pin, uint8_t key) {
   if (key == 0) return; 
+  
   int currentState = digitalRead(pin);
   
+  // Khởi tạo trạng thái thật cho toàn bộ các chân ở vòng quét đầu tiên
   if (!isButtonInitialized) {
     for (int i = 0; i < 40; i++) lastButtonStates[i] = digitalRead(i);
     isButtonInitialized = true;
@@ -224,33 +182,16 @@ void checkButton(int pin, uint8_t key) {
   }
 }
 
-// Xử lý nút bấm ảo nhận từ cổng Serial của ESP8266
-void checkSubButton(int currentVirtualState, int &lastVirtualState, uint8_t key, const char* btnName) {
-  if (key == 0) return;
-  
-  if (currentVirtualState != lastVirtualState) {
-    if (currentVirtualState == PRESSED) {
-      bleKeyboard.press(key);
-      Serial.print("-> TAY 2 ["); Serial.print(btnName); Serial.print("] PRESSED. Sent key: '"); Serial.print((char)key); Serial.println("'");
-    } else {
-      bleKeyboard.release(key);
-      Serial.print("<- TAY 2 ["); Serial.print(btnName); Serial.print("] RELEASED. Released key: '"); Serial.print((char)key); Serial.println("'");
-    }
-    lastVirtualState = currentVirtualState;
-  }
-}
-
-// Xử lý chuyển động Joystick với tham số cấu hình ngưỡng linh hoạt cho từng dòng chip
-void checkJoystick(int xVal, int yVal, uint8_t keyLeft, uint8_t keyRight, uint8_t keyUp, uint8_t keyDown, int joyIndex, int threshLow, int threshHigh) {  
+void checkJoystick(int xVal, int yVal, uint8_t keyLeft, uint8_t keyRight, uint8_t keyUp, uint8_t keyDown, int joyIndex) {  
   // --- TRỤC X: TRÁI / PHẢI ---
   if (keyLeft != 0) {
-    if (xVal < threshLow && !isLeftPressedGlobal[joyIndex]) {
+    if (xVal < JOY_THRESHOLD_LOW && !isLeftPressedGlobal[joyIndex]) {
       bleKeyboard.press(keyLeft); 
       isLeftPressedGlobal[joyIndex] = true; 
       lastLeftKeyGlobal[joyIndex] = keyLeft;
       Serial.print("-> TAY "); Serial.print(joyIndex + 1); Serial.print(" gạt TRÁI. Sent key: '"); Serial.print((char)keyLeft); Serial.println("'");
     } 
-    else if (xVal >= threshLow && isLeftPressedGlobal[joyIndex]) {
+    else if (xVal >= JOY_THRESHOLD_LOW && isLeftPressedGlobal[joyIndex]) {
       bleKeyboard.release(lastLeftKeyGlobal[joyIndex]); 
       isLeftPressedGlobal[joyIndex] = false;
       Serial.print("<- TAY "); Serial.print(joyIndex + 1); Serial.print(" thả TRÁI. Released key: '"); Serial.print((char)lastLeftKeyGlobal[joyIndex]); Serial.println("'");
@@ -258,21 +199,24 @@ void checkJoystick(int xVal, int yVal, uint8_t keyLeft, uint8_t keyRight, uint8_
   }
   
   if (keyRight != 0) {
-    if (xVal > threshHigh && !isRightPressedGlobal[joyIndex]) {
+    if (xVal > JOY_THRESHOLD_HIGH && !isRightPressedGlobal[joyIndex]) {
       bleKeyboard.press(keyRight); 
       isRightPressedGlobal[joyIndex] = true; 
       lastRightKeyGlobal[joyIndex] = keyRight;
       Serial.print("-> TAY "); Serial.print(joyIndex + 1); Serial.print(" gạt PHẢI. Sent key: '"); Serial.print((char)keyRight); Serial.println("'");
     } 
-    else if (xVal <= threshHigh && isRightPressedGlobal[joyIndex]) {
+    else if (xVal <= JOY_THRESHOLD_HIGH && isRightPressedGlobal[joyIndex]) {
       bleKeyboard.release(lastRightKeyGlobal[joyIndex]); 
       isRightPressedGlobal[joyIndex] = false;
       Serial.print("<- TAY "); Serial.print(joyIndex + 1); Serial.print(" thả PHẢI. Released key: '"); Serial.print((char)lastRightKeyGlobal[joyIndex]); Serial.println("'");
     }
   }
   
-  // --- TRỤC Y: LÊN / XUỐNG ---
-  // Lưu ý: Tay 1 và Tay 2 đều đọc trục Y bằng chip ESP32 (Chân 39 và Chân 35) nên phần này sẽ tự động áp dụng đúng dải analog của ESP32 (JOY_THRESHOLD_LOW/HIGH)
+  // =========================================================
+  // --- TRỤC Y: LÊN / XUỐNG (ĐÃ ĐẢO LOGIC THEO PHẦN CỨNG THỰC TẾ) ---
+  // =========================================================
+  
+  // 1. XỬ LÝ HƯỚNG LÊN (Khi kéo lên, giá trị đạt tối đa -> Vượt ngưỡng HIGH)
   if (keyUp != 0) {
     if (yVal > JOY_THRESHOLD_HIGH && !isUpPressedGlobal[joyIndex]) {
       bleKeyboard.press(keyUp); 
@@ -287,6 +231,7 @@ void checkJoystick(int xVal, int yVal, uint8_t keyLeft, uint8_t keyRight, uint8_
     }
   }
   
+  // 2. XỬ LÝ HƯỚNG XUỐNG (Khi gạt xuống, giá trị tụt về 0 -> Thấp hơn ngưỡng LOW)
   if (keyDown != 0) {
     if (yVal < JOY_THRESHOLD_LOW && !isDownPressedGlobal[joyIndex]) {
       bleKeyboard.press(keyDown); 
