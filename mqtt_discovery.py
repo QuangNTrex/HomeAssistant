@@ -23,6 +23,7 @@ def on_connect(client, userdata, flags, rc, properties=None):
         connected = True
         setup_espC()
         setup_espD()
+        setup_espE()
         print("[SYSTEM] MQTT Discovery Ready")
     else:
         print("[MQTT] Connect failed:", rc)
@@ -61,6 +62,13 @@ device_espC = {
 device_espD = {
     "identifiers": ["espD"],
     "name": "ESP D",
+    "model": "ESP8266",
+    "manufacturer": "Custom"
+}
+
+device_espE = {
+    "identifiers": ["espE"],
+    "name": "ESP E",
     "model": "ESP8266",
     "manufacturer": "Custom"
 }
@@ -292,6 +300,89 @@ def setup_espD():
         }
     )
 
+# ================== ESP E ==================
+def setup_espE():
+    publish_config(
+        "homeassistant/switch/espE_buzzer/config",
+        {
+            "name": "Buzzer",
+            "command_topic": "espE/buzzer/set",
+            "state_topic": "espE/buzzer/state",
+            "payload_on": "ON",
+            "payload_off": "OFF",
+            "unique_id": "espE_buzzer",
+            "icon": "mdi:volume-high",
+            "device": device_espE
+        }
+    )
+
+    publish_config(
+        "homeassistant/switch/espE_led/config",
+        {
+            "name": "LED",
+            "command_topic": "espE/led/set",
+            "state_topic": "espE/led/state",
+            "payload_on": "ON",
+            "payload_off": "OFF",
+            "unique_id": "espE_led",
+            "icon": "mdi:led-on",
+            "device": device_espE
+        }
+    )
+
+    publish_config(
+        "homeassistant/switch/espE_servo1/config",
+        {
+            "name": "Servo Light",
+            "command_topic": "espE/servo1/set",
+            "state_topic": "espE/servo1/state",
+            "payload_on": "ON",
+            "payload_off": "OFF",
+            "unique_id": "espE_servo1",
+            "icon": "mdi:lightbulb",
+            "device": device_espE
+        }
+    )
+
+    publish_config(
+        "homeassistant/switch/espE_motor1/config",
+        {
+            "name": "Motor 1",
+            "command_topic": "espE/motor1/set",
+            "state_topic": "espE/motor1/state",
+            "payload_on": "ON",
+            "payload_off": "OFF",
+            "unique_id": "espE_motor1",
+            "icon": "mdi:fan",
+            "device": device_espE
+        }
+    )
+
+    publish_config(
+        "homeassistant/switch/espE_motor2/config",
+        {
+            "name": "Motor 2",
+            "command_topic": "espE/motor2/set",
+            "state_topic": "espE/motor2/state",
+            "payload_on": "ON",
+            "payload_off": "OFF",
+            "unique_id": "espE_motor2",
+            "icon": "mdi:fan",
+            "device": device_espE
+        }
+    )
+
+    publish_config(
+        "homeassistant/sensor/espE_heartbeat/config",
+        {
+            "name": "ESP E Heartbeat",
+            "state_topic": "espE/heartbeat",
+            "unique_id": "espE_heartbeat",
+            "icon": "mdi:heart-pulse",
+            "device": device_espE
+        }
+    )
+
 # ================== HEARTBEAT LOOP ==================
 def heartbeat_loop():
     while True:
@@ -300,6 +391,7 @@ def heartbeat_loop():
 
             safe_publish("espC/heartbeat", ts, True)
             safe_publish("espD/heartbeat", ts, True)
+            safe_publish("espE/heartbeat", ts, True)
             safe_publish("system/mqtt/status", "online", True)
 
         time.sleep(HEARTBEAT_INTERVAL)

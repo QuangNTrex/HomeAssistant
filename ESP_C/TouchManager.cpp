@@ -66,25 +66,25 @@ static void handleHold() {
 
 //hello
 void singleTouch2() {
-  safePub(ESPD_RELAY1_SET.c_str(), "TOGGLE", true);
+  safePub(ESPD_RELAY1_SET.c_str(), "TOGGLE");
   log("TOUCH2", "1 tap → toggle relay1 (MQTT)");
   //showEvent("Tap ESP_D Relay 1", !espDRelayStates[0] ? "Turned ON" : "Turned OFF");
 }
 
 void doubleTouch2() {
-  safePub(ESPD_SERVO1_SET.c_str(), "TOGGLE", true);
+  safePub(ESPD_SERVO1_SET.c_str(), "TOGGLE");
   log("TOUCH2", "2 tap → toggle servo 1 (MQTT)");
   //showEvent("Tap ESP_D Servo 1", !espDServoStates[0] ? "Turned ON" : "Turned OFF");
 }
 
 void tripleTouch2() {
-  safePub(ESPD_SERVO2_SET.c_str(), "TOGGLE", true);
+  safePub(ESPD_SERVO2_SET.c_str(), "TOGGLE");
   log("TOUCH2", "3 tap → toggle servo 2 (MQTT)");
   //showEvent("Tap ESP_D Servo 2", !espDServoStates[1] ? "Turned ON" : "Turned OFF");
 }
 
 void holdTouch2() {
-  safePub(ESPD_FAN_SET.c_str(), "TOGGLE", true);
+  safePub(ESPD_FAN_SET.c_str(), "TOGGLE");
   log("TOUCH2", "HOLD → toggle fan (MQTT)");
   //showEvent("Tap ESP_D Fan", !espDFanState ? "Turned ON" : "Turned OFF");
 }
