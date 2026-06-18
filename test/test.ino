@@ -1,303 +1,337 @@
-#include <BleKeyboard.h>
+#include <ESP8266WiFi.h>
+#include <ESP8266WebServer.h>
+#include <Servo.h>
 
-BleKeyboard bleKeyboard("Joy Gamer", "DIY Creator", 100);
+// WiFi Configuration
+const char* ssid     = "Test";
+const char* password = "24082002";
 
-const int LED_PIN = 2; 
+ESP8266WebServer server(80);
+Servo myServo;
 
-const int PRESSED  = LOW;   
-const int RELEASED = HIGH;  
+// Pin mapping on NodeMCU/Wemos D1 Mini
+const int SERVO_PIN  = D1;  // GPIO 5
+const int BUZZER_PIN = D7;  // GPIO 13
 
-// TAY CẦM 1 (Đọc trực tiếp bằng các chân vật lý trên ESP32)
-const int JOY1_X = 36; const int JOY1_Y = 39; const int JOY1_K = 12;
-const int JOY1_A = 32; const int JOY1_B = 33; const int JOY1_C = 25;
-const int JOY1_D = 26; const int JOY1_E = 27; const int JOY1_F = 13; // NÚT CHUYỂN PROFILE
+bool servoState = false;
+bool buzzerState = false;
 
-// TAY CẦM 2 (Xử lý hỗn hợp: Trục Y đọc trực tiếp, Trục X + Toàn bộ nút nhận qua Serial từ ESP8266)
-const int JOY2_Y = 35; // Nhận tín hiệu Analog trục Y trực tiếp từ tay phụ qua 1 sợi dây riêng
+// HTML page content stored in Flash Memory (PROGMEM)
+const char HTML_CONTENT[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP8266 Device Controller</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --card-bg: #1e293b;
+            --accent-on: #10b981;
+            --accent-off: #ef4444;
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --servo-color: #6366f1;
+            --buzzer-color: #f59e0b;
+        }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Outfit', sans-serif;
+        }
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .container {
+            max-width: 600px;
+            width: 100%;
+            text-align: center;
+        }
+        header {
+            margin-bottom: 40px;
+        }
+        h1 {
+            font-size: 2.2rem;
+            font-weight: 800;
+            background: linear-gradient(135deg, #38bdf8, #818cf8);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 8px;
+        }
+        .subtitle {
+            color: var(--text-secondary);
+            font-size: 1rem;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 24px;
+        }
+        @media(min-width: 480px) {
+            .grid {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+        .card {
+            background-color: var(--card-bg);
+            border-radius: 20px;
+            padding: 30px 20px;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+        .card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.4);
+        }
+        .card-icon {
+            font-size: 3rem;
+            margin-bottom: 15px;
+        }
+        .card-title {
+            font-size: 1.3rem;
+            font-weight: 600;
+            margin-bottom: 10px;
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 6px 16px;
+            border-radius: 9999px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            margin-bottom: 25px;
+            transition: all 0.3s ease;
+        }
+        .status-on {
+            background-color: rgba(16, 185, 129, 0.15);
+            color: var(--accent-on);
+        }
+        .status-off {
+            background-color: rgba(239, 68, 68, 0.15);
+            color: var(--accent-off);
+        }
+        .btn-group {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+        .btn {
+            border: none;
+            padding: 12px 20px;
+            font-size: 0.95rem;
+            font-weight: 600;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            color: white;
+        }
+        .btn-on {
+            background-color: var(--accent-on);
+        }
+        .btn-on:hover {
+            background-color: #059669;
+            box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+        }
+        .btn-off {
+            background-color: var(--accent-off);
+        }
+        .btn-off:hover {
+            background-color: #dc2626;
+            box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+        }
+        footer {
+            margin-top: 50px;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>ESP8266 Web Controller</h1>
+            <p class="subtitle">Điều khiển Động cơ Servo & Còi Buzzer</p>
+        </header>
 
-// Cấu hình ngưỡng gạt của Joystick
-const int JOY_THRESHOLD_LOW  = 600; 
-const int JOY_THRESHOLD_HIGH = 3400; 
+        <div class="grid">
+            <!-- SERVO CARD -->
+            <div class="card" style="border-top: 4px solid var(--servo-color);">
+                <div class="card-icon" style="color: var(--servo-color);">⚙️</div>
+                <div class="card-title">Động cơ Servo (D1)</div>
+                <div id="servo-status" class="status-badge status-off">ĐANG TẮT (0°)</div>
+                <div class="btn-group">
+                    <button class="btn btn-on" onclick="setDevice('servo', 'on')">BẬT (180°)</button>
+                    <button class="btn btn-off" onclick="setDevice('servo', 'off')">TẮT (0°)</button>
+                </div>
+            </div>
 
-// Ngưỡng riêng cho ESP8266 (do dải ADC của ESP8266 là 10-bit: 0 - 1023)
-const int ESP8266_JOY_LOW    = 200;
-const int ESP8266_JOY_HIGH   = 800;
+            <!-- BUZZER CARD -->
+            <div class="card" style="border-top: 4px solid var(--buzzer-color);">
+                <div class="card-icon" style="color: var(--buzzer-color);">🔊</div>
+                <div class="card-title">Còi Buzzer (D7)</div>
+                <div id="buzzer-status" class="status-badge status-off">ĐANG TẮT</div>
+                <div class="btn-group">
+                    <button class="btn btn-on" onclick="setDevice('buzzer', 'on')">BẬT</button>
+                    <button class="btn btn-off" onclick="setDevice('buzzer', 'off')">TẮT</button>
+                </div>
+            </div>
+        </div>
 
-// Biến lưu trạng thái ảo của Tay cầm 2 sau khi giải mã từ Serial gửi về
-int subX = 512;
-int subA = 1, subB = 1, subC = 1, subD = 1, subE = 1, subF = 1, subK = 1;
+        <footer>
+            ESP8266 Web Server &bull; Connected
+        </footer>
+    </div>
 
-// CẤU TRÚC PROFILE GAME
-struct GameProfile {
-  // Hướng di chuyển (Joystick)
-  uint8_t t1_left; uint8_t t1_right; uint8_t t1_up; uint8_t t1_down;
-  uint8_t t2_left; uint8_t t2_right; uint8_t t2_up; uint8_t t2_down;
+    <script>
+        function setDevice(device, state) {
+            fetch(`/${device}?state=${state}`)
+                .then(response => response.json())
+                .then(data => {
+                    updateUI(device, data.state);
+                })
+                .catch(err => console.error("Lỗi gửi lệnh:", err));
+        }
 
-  // Các nút bấm hành động tương ứng từng chân phần cứng
-  uint8_t t1_k; uint8_t t1_a; uint8_t t1_b; uint8_t t1_c; uint8_t t1_d; uint8_t t1_e;
-  uint8_t t2_k; uint8_t t2_a; uint8_t t2_b; uint8_t t2_c; uint8_t t2_d; uint8_t t2_e; uint8_t t2_f; // Nút E, F của Tay 2 nếu cần có thể map thêm, nếu không dùng thì để 0 (không gửi phím)
-};
+        function updateUI(device, state) {
+            const statusEl = document.getElementById(`${device}-status`);
+            if (device === 'servo') {
+                if (state === 'ON') {
+                    statusEl.innerText = 'ĐANG BẬT (180°)';
+                    statusEl.className = 'status-badge status-on';
+                } else {
+                    statusEl.innerText = 'ĐANG TẮT (0°)';
+                    statusEl.className = 'status-badge status-off';
+                }
+            } else if (device === 'buzzer') {
+                if (state === 'ON') {
+                    statusEl.innerText = 'ĐANG BẬT';
+                    statusEl.className = 'status-badge status-on';
+                } else {
+                    statusEl.innerText = 'ĐANG TẮT';
+                    statusEl.className = 'status-badge status-off';
+                }
+            }
+        }
 
-// Profile 0: pr ađa
-GameProfile profile0 = { 
-  'a', 'd', 'w', 's',  KEY_LEFT_ARROW, KEY_RIGHT_ARROW, KEY_UP_ARROW, KEY_DOWN_ARROW,
-  0, 'w', 'd', 's', 'a', 0,
-  0, KEY_UP_ARROW, KEY_LEFT_ARROW, KEY_DOWN_ARROW, KEY_RIGHT_ARROW
-};
+        // Khởi tạo trạng thái ban đầu khi load trang
+        function initStates() {
+            fetch('/status')
+                .then(response => response.json())
+                .then(data => {
+                    updateUI('servo', data.servo);
+                    updateUI('buzzer', data.buzzer);
+                });
+        }
+        window.onload = initStates;
+    </script>
+</body>
+</html>
+)rawliteral";
 
-// Profile 1: bad ice
-GameProfile profile1 = { 
-  'a', 'd', 'w', 's',  KEY_LEFT_ARROW, KEY_RIGHT_ARROW, KEY_UP_ARROW, KEY_DOWN_ARROW,
-  0, 'q', 0, 0, 0, 'r',
-  0, ' ', 0, 0, 0
-};
+// Request routing handlers
+void handleRoot() {
+  server.send_P(200, "text/html", HTML_CONTENT);
+}
 
-// Profile 2: Songoku 2.5
-GameProfile profile2 = { 
-  'a', 'd', 'w', 's',  KEY_LEFT_ARROW, KEY_RIGHT_ARROW, KEY_UP_ARROW, KEY_DOWN_ARROW,
-  'l', 'k', 'o', 'i', 'j', 'u',
-  KEY_NUM_3, KEY_NUM_2, KEY_NUM_6, KEY_NUM_5, KEY_NUM_1
-};
+void handleStatus() {
+  String json = "{\"servo\":\"" + String(servoState ? "ON" : "OFF") + 
+                "\",\"buzzer\":\"" + String(buzzerState ? "ON" : "OFF") + "\"}";
+  server.send(200, "application/json", json);
+}
 
-GameProfile activeProfiles[] = {profile0, profile1, profile2};
-int currentProfileIndex = 0; 
-const int TOTAL_PROFILES = sizeof(activeProfiles) / sizeof(activeProfiles[0]);
+void handleServo() {
+  if (server.hasArg("state")) {
+    String state = server.arg("state");
+    if (state == "on") {
+      servoState = true;
+      myServo.write(180);
+      Serial.println("Servo: 180 degrees (ON)");
+    } else {
+      servoState = false;
+      myServo.write(0);
+      Serial.println("Servo: 0 degrees (OFF)");
+    }
+  }
+  String json = "{\"device\":\"servo\",\"state\":\"" + String(servoState ? "ON" : "OFF") + "\"}";
+  server.send(200, "application/json", json);
+}
 
-unsigned long lastScanTime = 0;     
-unsigned long lastLedToggle = 0;    
-int ledFlashesCount = 0;            
-int ledState = LOW;
-
-// Mảng lưu trạng thái nút (Mở rộng kích thước lưu trạng thái nút ảo của Tay 2)
-int lastButtonStates[40]; 
-int lastSubButtonStates[8]; // Lưu trạng thái cũ của [A, B, C, D, E, F, K] từ ESP8266
-bool isButtonInitialized = false; 
-
-bool isLeftPressedGlobal[2]  = {false, false};
-bool isRightPressedGlobal[2] = {false, false};
-bool isUpPressedGlobal[2]    = {false, false};
-bool isDownPressedGlobal[2]  = {false, false};
-
-uint8_t lastLeftKeyGlobal[2]  = {0, 0};
-uint8_t lastRightKeyGlobal[2] = {0, 0};
-uint8_t lastUpKeyGlobal[2]    = {0, 0};
-uint8_t lastDownKeyGlobal[2]  = {0, 0};
-
-int lastButtonFState = RELEASED; 
-
-void triggerLedBlink(int flashes);
-void checkButton(int pin, uint8_t key);
-void checkSubButton(int currentVirtualState, int &lastVirtualState, uint8_t key, const char* btnName);
-void checkJoystick(int xVal, int yVal, uint8_t keyLeft, uint8_t keyRight, uint8_t keyUp, uint8_t keyDown, int joyIndex, int threshLow, int threshHigh);
+void handleBuzzer() {
+  if (server.hasArg("state")) {
+    String state = server.arg("state");
+    if (state == "on") {
+      buzzerState = true;
+      digitalWrite(BUZZER_PIN, HIGH);
+      Serial.println("Buzzer: HIGH (ON)");
+    } else {
+      buzzerState = false;
+      digitalWrite(BUZZER_PIN, LOW);
+      Serial.println("Buzzer: LOW (OFF)");
+    }
+  }
+  String json = "{\"device\":\"buzzer\",\"state\":\"" + String(buzzerState ? "ON" : "OFF") + "\"}";
+  server.send(200, "application/json", json);
+}
 
 void setup() {
-  Serial.begin(115200); 
-  
-  // Khởi tạo Serial2 để kết nối nhận data từ ESP8266: RX2 = GPIO16, TX2 = GPIO17
-  Serial2.begin(115200, SERIAL_8N1, 16, 17);
-  
-  bleKeyboard.begin();
-  pinMode(LED_PIN, OUTPUT);
-  
-  // Cấu hình các chân vật lý hiện có trên Tay 1 của ESP32
-  int pins[] = {JOY1_K, JOY1_A, JOY1_B, JOY1_C, JOY1_D, JOY1_E, JOY1_F};
-  for (int pin : pins) pinMode(pin, INPUT_PULLUP);
-  
-  // Khởi tạo trạng thái mảng nút phụ ảo (mặc định là nhả = RELEASED = 1)
-  for (int i = 0; i < 8; i++) lastSubButtonStates[i] = RELEASED;
+  Serial.begin(115200);
+  delay(100);
+  Serial.println("\nESP8266 starting up...");
 
-  triggerLedBlink(1); 
+  // Initialize hardware pins
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, LOW);
+
+  myServo.attach(SERVO_PIN);
+  myServo.write(0); // Default position
+
+  // Start connecting to WiFi
+  WiFi.begin(ssid, password);
+  Serial.print("Connecting to WiFi: ");
+  Serial.println(ssid);
+
+  // Try connecting for 10 seconds
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < 10000) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println();
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.print("Connected successfully! IP Address: ");
+    Serial.println(WiFi.localIP());
+  } else {
+    Serial.println("Connection failed. Continuing to SoftAP Mode.");
+  }
+
+  // Create local Access Point as backup/alternative access
+  WiFi.softAP("ESP8266-Control", "12345678");
+  Serial.print("Access Point started. IP Address: ");
+  Serial.println(WiFi.softAPIP());
+
+  // Setup server routing paths
+  server.on("/", handleRoot);
+  server.on("/status", handleStatus);
+  server.on("/servo", handleServo);
+  server.on("/buzzer", handleBuzzer);
+
+  // Start the server
+  server.begin();
+  Serial.println("HTTP Web Server Started.");
 }
 
 void loop() {
-  unsigned long currentTime = millis();
-
-  // 1. NHẬN VÀ GIẢI MÃ CHUỖI DATA TỪ ESP8266 (TAY PHỤ) VỚI CẤU HÌNH MỚI
-  if (Serial2.available() > 0) {
-    String data = Serial2.readStringUntil('\n');
-    data.trim();
-    
-    if (data.length() > 0) {
-      String values[8]; 
-      int currentIndex = 0;
-      int pos = 0;
-      
-      // Tách chuỗi bằng dấu phẩy ','
-      while ((pos = data.indexOf(',')) != -1 && currentIndex < 7) {
-        values[currentIndex] = data.substring(0, pos);
-        data = data.substring(pos + 1);
-        currentIndex++;
-      }
-      values[currentIndex] = data; // Phần tử cuối cùng (Nút K)
-
-      // Cập nhật các biến trạng thái từ gói tin (TrụcX,A,B,C,D,E,F,K)
-      subX = values[0].toInt();
-      subA = values[1].toInt();
-      subB = values[2].toInt();
-      subC = values[3].toInt();
-      subD = values[4].toInt();
-      subE = values[5].toInt();
-      subF = values[6].toInt();
-      subK = values[7].toInt();
-    }
-  }
-
-  // 2. LOGIC CHUYỂN PROFILE (Nút F trên Tay 1 kích hoạt chuyển nhanh)
-  int currentButtonFState = digitalRead(JOY1_F);
-  if (lastButtonFState == RELEASED && currentButtonFState == PRESSED) {
-    currentProfileIndex = (currentProfileIndex + 1) % TOTAL_PROFILES;
-    bleKeyboard.releaseAll(); 
-    triggerLedBlink(currentProfileIndex + 1); 
-  }
-  lastButtonFState = currentButtonFState; 
-
-  if (ledFlashesCount > 0) {
-    if (currentTime - lastLedToggle >= 150) { 
-      lastLedToggle = currentTime;
-      ledState = (ledState == LOW) ? HIGH : LOW;
-      digitalWrite(LED_PIN, ledState);
-      if (ledState == LOW) ledFlashesCount--; 
-    }
-  }
-
-  // 3. QUÉT VÀ TRUYỀN PHÍM CHU KỲ 10MS
-  if (currentTime - lastScanTime >= 10) {
-    lastScanTime = currentTime;
-
-    if (bleKeyboard.isConnected()) {
-      GameProfile p = activeProfiles[currentProfileIndex]; 
-
-      // --- XỬ LÝ TAY CẦM 1 (Quét phần cứng trực tiếp) ---
-      checkJoystick(analogRead(JOY1_X), analogRead(JOY1_Y), p.t1_left, p.t1_right, p.t1_up, p.t1_down, 0, JOY_THRESHOLD_LOW, JOY_THRESHOLD_HIGH);
-      checkButton(JOY1_K, p.t1_k); 
-      checkButton(JOY1_A, p.t1_a); checkButton(JOY1_B, p.t1_b); checkButton(JOY1_C, p.t1_c);
-      checkButton(JOY1_D, p.t1_d); checkButton(JOY1_E, p.t1_e); 
-
-      // --- XỬ LÝ TAY CẦM 2 (Hỗn hợp nhận từ Serial + Analog Trục Y trực tiếp) ---
-      // Trục X dùng dải ESP8266 (0-1023), Trục Y dùng dải ESP32 (0-4095)
-      checkJoystick(subX, analogRead(JOY2_Y), p.t2_left, p.t2_right, p.t2_up, p.t2_down, 1, ESP8266_JOY_LOW, ESP8266_JOY_HIGH);
-      
-      // Quét các nút ảo được xử lý từ luồng dữ liệu của ESP8266
-      checkSubButton(subA, lastSubButtonStates[0], p.t2_a, "Sub_A");
-      checkSubButton(subB, lastSubButtonStates[1], p.t2_b, "Sub_B");
-      checkSubButton(subC, lastSubButtonStates[2], p.t2_c, "Sub_C");
-      checkSubButton(subD, lastSubButtonStates[3], p.t2_d, "Sub_D");
-      checkSubButton(subK, lastSubButtonStates[4], p.t2_k, "Sub_K"); 
-      // Các nút ảo E, F của Tay 2 nếu không map trong profile có thể bỏ qua hoặc xử lý thêm tương tự nếu cần.
-    }
-  }
-}
-
-// =========================================================
-// CÁC HÀM XỬ LÝ CON
-// =========================================================
-
-void triggerLedBlink(int flashes) {
-  ledFlashesCount = flashes;
-  lastLedToggle = millis();
-  ledState = HIGH;
-  digitalWrite(LED_PIN, ledState);
-}
-
-// Xử lý nút bấm vật lý trực tiếp trên ESP32
-void checkButton(int pin, uint8_t key) {
-  if (key == 0) return; 
-  int currentState = digitalRead(pin);
-  
-  if (!isButtonInitialized) {
-    for (int i = 0; i < 40; i++) lastButtonStates[i] = digitalRead(i);
-    isButtonInitialized = true;
-    currentState = digitalRead(pin); 
-  }
-  
-  if (currentState != lastButtonStates[pin]) {
-    if (currentState == PRESSED) {
-      bleKeyboard.press(key);
-      Serial.print("-> BUTTON [Pin "); Serial.print(pin); 
-      Serial.print("] PRESSED. Sent key: '"); Serial.print((char)key); Serial.println("'");
-    } else {
-      bleKeyboard.release(key);
-      Serial.print("<- BUTTON [Pin "); Serial.print(pin); 
-      Serial.print("] RELEASED. Released key: '"); Serial.print((char)key); Serial.println("'");
-    }
-    lastButtonStates[pin] = currentState; 
-  }
-}
-
-// Xử lý nút bấm ảo nhận từ cổng Serial của ESP8266
-void checkSubButton(int currentVirtualState, int &lastVirtualState, uint8_t key, const char* btnName) {
-  if (key == 0) return;
-  
-  if (currentVirtualState != lastVirtualState) {
-    if (currentVirtualState == PRESSED) {
-      bleKeyboard.press(key);
-      Serial.print("-> TAY 2 ["); Serial.print(btnName); Serial.print("] PRESSED. Sent key: '"); Serial.print((char)key); Serial.println("'");
-    } else {
-      bleKeyboard.release(key);
-      Serial.print("<- TAY 2 ["); Serial.print(btnName); Serial.print("] RELEASED. Released key: '"); Serial.print((char)key); Serial.println("'");
-    }
-    lastVirtualState = currentVirtualState;
-  }
-}
-
-// Xử lý chuyển động Joystick với tham số cấu hình ngưỡng linh hoạt cho từng dòng chip
-void checkJoystick(int xVal, int yVal, uint8_t keyLeft, uint8_t keyRight, uint8_t keyUp, uint8_t keyDown, int joyIndex, int threshLow, int threshHigh) {  
-  // --- TRỤC X: TRÁI / PHẢI ---
-  if (keyLeft != 0) {
-    if (xVal < threshLow && !isLeftPressedGlobal[joyIndex]) {
-      bleKeyboard.press(keyLeft); 
-      isLeftPressedGlobal[joyIndex] = true; 
-      lastLeftKeyGlobal[joyIndex] = keyLeft;
-      Serial.print("-> TAY "); Serial.print(joyIndex + 1); Serial.print(" gạt TRÁI. Sent key: '"); Serial.print((char)keyLeft); Serial.println("'");
-    } 
-    else if (xVal >= threshLow && isLeftPressedGlobal[joyIndex]) {
-      bleKeyboard.release(lastLeftKeyGlobal[joyIndex]); 
-      isLeftPressedGlobal[joyIndex] = false;
-      Serial.print("<- TAY "); Serial.print(joyIndex + 1); Serial.print(" thả TRÁI. Released key: '"); Serial.print((char)lastLeftKeyGlobal[joyIndex]); Serial.println("'");
-    }
-  }
-  
-  if (keyRight != 0) {
-    if (xVal > threshHigh && !isRightPressedGlobal[joyIndex]) {
-      bleKeyboard.press(keyRight); 
-      isRightPressedGlobal[joyIndex] = true; 
-      lastRightKeyGlobal[joyIndex] = keyRight;
-      Serial.print("-> TAY "); Serial.print(joyIndex + 1); Serial.print(" gạt PHẢI. Sent key: '"); Serial.print((char)keyRight); Serial.println("'");
-    } 
-    else if (xVal <= threshHigh && isRightPressedGlobal[joyIndex]) {
-      bleKeyboard.release(lastRightKeyGlobal[joyIndex]); 
-      isRightPressedGlobal[joyIndex] = false;
-      Serial.print("<- TAY "); Serial.print(joyIndex + 1); Serial.print(" thả PHẢI. Released key: '"); Serial.print((char)lastRightKeyGlobal[joyIndex]); Serial.println("'");
-    }
-  }
-  
-  // --- TRỤC Y: LÊN / XUỐNG ---
-  // Lưu ý: Tay 1 và Tay 2 đều đọc trục Y bằng chip ESP32 (Chân 39 và Chân 35) nên phần này sẽ tự động áp dụng đúng dải analog của ESP32 (JOY_THRESHOLD_LOW/HIGH)
-  if (keyUp != 0) {
-    if (yVal > JOY_THRESHOLD_HIGH && !isUpPressedGlobal[joyIndex]) {
-      bleKeyboard.press(keyUp); 
-      isUpPressedGlobal[joyIndex] = true; 
-      lastUpKeyGlobal[joyIndex] = keyUp;
-      Serial.print("-> TAY "); Serial.print(joyIndex + 1); Serial.print(" gạt LÊN. Sent key: '"); Serial.print((char)keyUp); Serial.println("'");
-    } 
-    else if (yVal <= JOY_THRESHOLD_HIGH && isUpPressedGlobal[joyIndex]) {
-      bleKeyboard.release(lastUpKeyGlobal[joyIndex]); 
-      isUpPressedGlobal[joyIndex] = false;
-      Serial.print("<- TAY "); Serial.print(joyIndex + 1); Serial.print(" thả LÊN. Released key: '"); Serial.print((char)lastUpKeyGlobal[joyIndex]); Serial.println("'");
-    }
-  }
-  
-  if (keyDown != 0) {
-    if (yVal < JOY_THRESHOLD_LOW && !isDownPressedGlobal[joyIndex]) {
-      bleKeyboard.press(keyDown); 
-      isDownPressedGlobal[joyIndex] = true; 
-      lastDownKeyGlobal[joyIndex] = keyDown;
-      Serial.print("-> TAY "); Serial.print(joyIndex + 1); Serial.print(" gạt XUỐNG. Sent key: '"); Serial.print((char)keyDown); Serial.println("'");
-    } 
-    else if (yVal >= JOY_THRESHOLD_LOW && isDownPressedGlobal[joyIndex]) {
-      bleKeyboard.release(lastDownKeyGlobal[joyIndex]); 
-      isDownPressedGlobal[joyIndex] = false;
-      Serial.print("<- TAY "); Serial.print(joyIndex + 1); Serial.print(" thả XUỐNG. Released key: '"); Serial.print((char)lastDownKeyGlobal[joyIndex]); Serial.println("'");
-    }
-  }
+  server.handleClient();
+  yield();
 }

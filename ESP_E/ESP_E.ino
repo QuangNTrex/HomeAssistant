@@ -5,7 +5,7 @@
 
 // ================== WIFI CONFIG ==================
 const char* ssid     = "Test";
-const char* password = "12345678";
+const char* password = "24082002";
 
 // ================== WIFI WATCHDOG VARS ==================
 unsigned long wifiLostSince = 0;

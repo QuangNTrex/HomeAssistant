@@ -7,5 +7,7 @@
 
 void touchBegin();
 void handleTouch();
+void singleTouch();
+void doubleTouch();
 
 #endif // TOUCH_MANAGER_H

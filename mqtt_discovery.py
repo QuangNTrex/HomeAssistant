@@ -373,6 +373,38 @@ def setup_espE():
     )
 
     publish_config(
+        "homeassistant/number/espE_motor1_speed/config",
+        {
+            "name": "Motor 1 Speed",
+            "command_topic": "espE/motor1/set",
+            "state_topic": "espE/motor1/speed",
+            "min": 1,
+            "max": 5,
+            "step": 1,
+            "mode": "slider",
+            "unique_id": "espE_motor1_speed",
+            "icon": "mdi:speedometer",
+            "device": device_espE
+        }
+    )
+
+    publish_config(
+        "homeassistant/number/espE_motor2_speed/config",
+        {
+            "name": "Motor 2 Speed",
+            "command_topic": "espE/motor2/set",
+            "state_topic": "espE/motor2/speed",
+            "min": 1,
+            "max": 5,
+            "step": 1,
+            "mode": "slider",
+            "unique_id": "espE_motor2_speed",
+            "icon": "mdi:speedometer",
+            "device": device_espE
+        }
+    )
+
+    publish_config(
         "homeassistant/sensor/espE_heartbeat/config",
         {
             "name": "ESP E Heartbeat",
