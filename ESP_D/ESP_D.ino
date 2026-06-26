@@ -53,9 +53,16 @@ void logf(const char* tag, const char* fmt, ...) {
 // ============================================================
 //  TIME HELPERS
 // ============================================================
+bool getLocalTimeNonBlocking(struct tm * info) {
+  time_t now;
+  time(&now);
+  localtime_r(&now, info);
+  return (info->tm_year > (1970 - 1900));
+}
+
 bool isNightTime() {
   if (!timeReady) return false;
-  if (!getLocalTime(&timeinfo)) return false;
+  if (!getLocalTimeNonBlocking(&timeinfo)) return false;
   int hour = timeinfo.tm_hour, minute = timeinfo.tm_min;
   if (hour > 17 || (hour == 17 && minute >= 30)) return true;
   if (hour < 5) return true;
@@ -63,7 +70,7 @@ bool isNightTime() {
 }
 
 void getTimeOfDay(char* outBuf, size_t bufLen) {
-  if (!getLocalTime(&timeinfo)) {
+  if (!getLocalTimeNonBlocking(&timeinfo)) {
     strncpy(outBuf, "Unknown", bufLen - 1);
     outBuf[bufLen - 1] = '\0';
     return;

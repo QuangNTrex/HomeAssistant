@@ -1,24 +1,24 @@
-#include <ESP8266WiFi.h>
 #include "DeviceManager.h"
 #include "MqttManager.h"
 #include "TouchManager.h"
+#include <ESP8266WiFi.h>
 
 // ================== WIFI CONFIG ==================
-const char* ssid     = "Test";
-const char* password = "24082002";
+const char *ssid = "Test";
+const char *password = "24082002";
 
 // ================== WIFI WATCHDOG VARS ==================
 unsigned long wifiLostSince = 0;
-const unsigned long WIFI_DEAD_TIMEOUT = 60000;          // 60s loss = restart
+const unsigned long WIFI_DEAD_TIMEOUT = 60000; // 60s loss = restart
 unsigned long lastWiFiAttempt = 0;
-const unsigned long WIFI_RECONNECT_INTERVAL = 5000;    // retry wifi every 5s
+const unsigned long WIFI_RECONNECT_INTERVAL = 5000; // retry wifi every 5s
 
 // ================== CLIENT OBJECTS ==================
 WiFiClient espClient;
 PubSubClient client(espClient);
 
 // ================== LOGGING SYSTEM ==================
-void log(const String& tag, const String& msg) {
+void log(const String &tag, const String &msg) {
   Serial.print("[");
   Serial.print(millis());
   Serial.print("] [");
@@ -72,7 +72,8 @@ void handleWiFi() {
   }
 
   // Non-blocking reconnection logic
-  if (now - lastWiFiAttempt < WIFI_RECONNECT_INTERVAL) return;
+  if (now - lastWiFiAttempt < WIFI_RECONNECT_INTERVAL)
+    return;
   lastWiFiAttempt = now;
 
   log("WIFI", "Attempting connection retry. Status: " + String(status));
@@ -87,7 +88,7 @@ void handleWiFi() {
 }
 
 // ================== MQTT ROUTER CALLBACK ==================
-void mqttCallback(char* topic, byte* payload, unsigned int length) {
+void mqttCallback(char *topic, byte *payload, unsigned int length) {
   String msg;
   for (unsigned int i = 0; i < length; i++) {
     msg += (char)payload[i];
@@ -96,33 +97,44 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   log("MQTT", "Received: " + t + " = " + msg);
 
   if (t == "espE/buzzer/set") {
-    if      (msg == "ON")     setBuzzer(true);
-    else if (msg == "OFF")    setBuzzer(false);
-    else if (msg == "TOGGLE") toggleBuzzer();
-  }
-  else if (t == "espE/led/set") {
-    if      (msg == "ON")     setLED(true);
-    else if (msg == "OFF")    setLED(false);
-    else if (msg == "TOGGLE") toggleLED();
-  }
-  else if (t == "espE/servo1/set") {
-    if      (msg == "ON")     setServoLight(true);
-    else if (msg == "OFF")    setServoLight(false);
-    else if (msg == "TOGGLE") toggleServoLight();
-  }
-  else if (t == "espE/motor1/set") {
-    if      (msg == "ON")     setMotorState(1, true);
-    else if (msg == "OFF")    setMotorState(1, false);
-    else if (msg == "TOGGLE") toggleMotorState(1);
+    if (msg == "ON")
+      setBuzzer(true);
+    else if (msg == "OFF")
+      setBuzzer(false);
+    else if (msg == "TOGGLE")
+      toggleBuzzer();
+  } else if (t == "espE/led/set") {
+    if (msg == "ON")
+      setLED(true);
+    else if (msg == "OFF")
+      setLED(false);
+    else if (msg == "TOGGLE")
+      toggleLED();
+  } else if (t == "espE/servo1/set") {
+    if (msg == "ON")
+      setServoLight(true);
+    else if (msg == "OFF")
+      setServoLight(false);
+    else if (msg == "TOGGLE")
+      toggleServoLight();
+  } else if (t == "espE/motor1/set") {
+    if (msg == "ON")
+      setMotorState(1, true);
+    else if (msg == "OFF")
+      setMotorState(1, false);
+    else if (msg == "TOGGLE")
+      toggleMotorState(1);
     else {
       int speed = msg.toInt();
       setMotorSpeed(1, speed);
     }
-  }
-  else if (t == "espE/motor2/set") {
-    if      (msg == "ON")     setMotorState(2, true);
-    else if (msg == "OFF")    setMotorState(2, false);
-    else if (msg == "TOGGLE") toggleMotorState(2);
+  } else if (t == "espE/motor2/set") {
+    if (msg == "ON")
+      setMotorState(2, true);
+    else if (msg == "OFF")
+      setMotorState(2, false);
+    else if (msg == "TOGGLE")
+      toggleMotorState(2);
     else {
       int speed = msg.toInt();
       setMotorSpeed(2, speed);
@@ -139,7 +151,7 @@ void setup() {
   setupDevices();
   touchBegin();
   setup_wifi();
-  
+
   mqttBegin(mqttCallback);
   log("BOOT", "Setup complete. Free heap: " + String(ESP.getFreeHeap()));
 }
@@ -150,9 +162,10 @@ void loop() {
   static unsigned long lastDiagnostics = 0;
   if (millis() - lastDiagnostics > 30000) {
     lastDiagnostics = millis();
-    log("HEAP", "Free heap: " + String(ESP.getFreeHeap()) + 
-               " | WiFi RSSI: " + String(WiFi.RSSI()) + " dBm" +
-               " | MQTT Status: " + (mqttIsConnected() ? "OK" : "DISCONNECTED"));
+    log("HEAP",
+        "Free heap: " + String(ESP.getFreeHeap()) +
+            " | WiFi RSSI: " + String(WiFi.RSSI()) + " dBm" +
+            " | MQTT Status: " + (mqttIsConnected() ? "OK" : "DISCONNECTED"));
   }
 
   // Handle Wi-Fi watchdog

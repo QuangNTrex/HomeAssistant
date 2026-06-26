@@ -26,7 +26,12 @@ void doubleTouch() {
 }
 
 void tripleTouch() {
-  log("TOUCH", "tripleTouch -> Turn OFF LED");
+  log("TOUCH", "tripleTouch -> Toggle Motor 1");
+  toggleMotorState(1);
+}
+
+void longTouch() {
+  log("TOUCH", "longTouch -> Turn OFF LED");
   setLED(false);
 }
 
@@ -76,6 +81,8 @@ void handleTouch() {
       singleTouch();
     } else if (touchCount == 2) {
       doubleTouch();
+    } else if (touchCount == 3) {
+      tripleTouch();
     } else {
       log("TOUCH", "No action for count=" + String(touchCount));
     }

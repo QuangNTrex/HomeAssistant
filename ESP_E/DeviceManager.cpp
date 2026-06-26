@@ -1,11 +1,22 @@
 #include "DeviceManager.h"
-#include <Servo.h>
 #include "MqttManager.h"
+#include <Servo.h>
 
 // Forward declaration for logging from ESP_E.ino
-extern void log(const String& tag, const String& msg);
+extern void log(const String &tag, const String &msg);
 
 Servo lightServo;
+
+const int MIN_MOTOR_PWM = 323;
+const int MAX_MOTOR_PWM = 1023;
+
+static int getMotorPwm(int level) {
+  if (level < 1)
+    level = 1;
+  if (level > 5)
+    level = 5;
+  return MIN_MOTOR_PWM + (level - 1) * (MAX_MOTOR_PWM - MIN_MOTOR_PWM) / 4;
+}
 
 bool buzzerState = false;
 bool ledState = false;
@@ -44,34 +55,33 @@ void setupDevices() {
 }
 
 void setBuzzer(bool state) {
-  if (buzzerState == state) return;
+  if (buzzerState == state)
+    return;
   buzzerState = state;
   digitalWrite(BUZZER_PIN, state ? HIGH : LOW);
   log("BUZZER", "Buzzer -> " + String(state ? "ON" : "OFF"));
   safePub("espE/buzzer/state", state ? "ON" : "OFF", true);
 }
 
-void toggleBuzzer() {
-  setBuzzer(!buzzerState);
-}
+void toggleBuzzer() { setBuzzer(!buzzerState); }
 
 void setLED(bool state) {
-  if (ledState == state) return;
+  if (ledState == state)
+    return;
   ledState = state;
   digitalWrite(LIGHT_PIN, state ? HIGH : LOW);
   log("LED", "LED -> " + String(state ? "ON" : "OFF"));
   safePub("espE/led/state", state ? "ON" : "OFF", true);
 }
 
-void toggleLED() {
-  setLED(!ledState);
-}
+void toggleLED() { setLED(!ledState); }
 
 void setServoLight(bool state) {
-  if (servoLightState == state) return;
+  if (servoLightState == state)
+    return;
   servoLightState = state;
   int angle = state ? 180 : 110;
-  
+
   if (servoActive) {
     lightServo.detach();
     servoActive = false;
@@ -83,32 +93,35 @@ void setServoLight(bool state) {
   servoActive = true;
   servoTimer = millis();
 
-  log("SERVO", "Light -> " + String(state ? "ON" : "OFF") + " (angle=" + String(angle) + ")");
+  log("SERVO", "Light -> " + String(state ? "ON" : "OFF") +
+                   " (angle=" + String(angle) + ")");
   safePub("espE/servo1/state", state ? "ON" : "OFF", true);
 }
 
-void toggleServoLight() {
-  setServoLight(!servoLightState);
-}
+void toggleServoLight() { setServoLight(!servoLightState); }
 
 void setMotorSpeed(int motorId, int speed) {
-  if (speed < 1) speed = 1;
-  if (speed > 5) speed = 5;
+  if (speed < 1)
+    speed = 1;
+  if (speed > 5)
+    speed = 5;
 
-  int pwm = (speed == 5) ? 1023 : (speed * 204);
+  int pwm = getMotorPwm(speed);
 
   if (motorId == 1) {
     motor1Speed = speed;
     motor1State = true;
     analogWrite(MOTOR_1_PIN, pwm);
-    log("MOTOR1", "Speed Level -> " + String(speed) + " (PWM=" + String(pwm) + ")");
+    log("MOTOR1",
+        "Speed Level -> " + String(speed) + " (PWM=" + String(pwm) + ")");
     safePub("espE/motor1/speed", String(speed).c_str(), true);
     safePub("espE/motor1/state", "ON", true);
   } else if (motorId == 2) {
     motor2Speed = speed;
     motor2State = true;
     analogWrite(MOTOR_2_PIN, pwm);
-    log("MOTOR2", "Speed Level -> " + String(speed) + " (PWM=" + String(pwm) + ")");
+    log("MOTOR2",
+        "Speed Level -> " + String(speed) + " (PWM=" + String(pwm) + ")");
     safePub("espE/motor2/speed", String(speed).c_str(), true);
     safePub("espE/motor2/state", "ON", true);
   }
@@ -116,19 +129,23 @@ void setMotorSpeed(int motorId, int speed) {
 
 void setMotorState(int motorId, bool state) {
   if (motorId == 1) {
-    if (motor1State == state) return;
+    if (motor1State == state)
+      return;
     motor1State = state;
-    int pwm = state ? ((motor1Speed == 5) ? 1023 : (motor1Speed * 204)) : 0;
+    int pwm = state ? getMotorPwm(motor1Speed) : 0;
     analogWrite(MOTOR_1_PIN, pwm);
-    log("MOTOR1", "State -> " + String(state ? "ON" : "OFF") + " (PWM=" + String(pwm) + ")");
+    log("MOTOR1", "State -> " + String(state ? "ON" : "OFF") +
+                      " (PWM=" + String(pwm) + ")");
     safePub("espE/motor1/state", state ? "ON" : "OFF", true);
     safePub("espE/motor1/speed", String(motor1Speed).c_str(), true);
   } else if (motorId == 2) {
-    if (motor2State == state) return;
+    if (motor2State == state)
+      return;
     motor2State = state;
-    int pwm = state ? ((motor2Speed == 5) ? 1023 : (motor2Speed * 204)) : 0;
+    int pwm = state ? getMotorPwm(motor2Speed) : 0;
     analogWrite(MOTOR_2_PIN, pwm);
-    log("MOTOR2", "State -> " + String(state ? "ON" : "OFF") + " (PWM=" + String(pwm) + ")");
+    log("MOTOR2", "State -> " + String(state ? "ON" : "OFF") +
+                      " (PWM=" + String(pwm) + ")");
     safePub("espE/motor2/state", state ? "ON" : "OFF", true);
     safePub("espE/motor2/speed", String(motor2Speed).c_str(), true);
   }
